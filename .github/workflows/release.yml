@@ -1,0 +1,136 @@
+name: Release APK
+
+# Release flow:
+#  - push a tag "vX.Y.Z" -> builds & publishes that exact version
+#  - workflow_dispatch   -> bumps patch/minor/major from the latest v* tag,
+#                           builds and creates the tag + release automatically
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Version bump applied to the latest v* tag'
+        required: true
+        default: 'patch'
+        type: choice
+        options: [patch, minor, major]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Analyze, test, build, release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history incl. tags for the changelog & bump
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # Pinned Flutter version — keep in sync with the local toolchain.
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.5
+          channel: stable
+          cache: true
+
+      - name: Resolve version (tag push or dispatch bump)
+        id: version
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            LATEST="$(git tag -l 'v*' --sort=-v:refname | head -n1 || true)"
+            LATEST="${LATEST#v}"
+            LATEST="${LATEST:-0.0.0}"
+            IFS='.' read -r MA MI PA <<< "${LATEST}"
+            case "${{ inputs.bump }}" in
+              major) MA=$((MA+1)); MI=0; PA=0 ;;
+              minor) MI=$((MI+1)); PA=0 ;;
+              patch) PA=$((PA+1)) ;;
+              *) echo "unknown bump: ${{ inputs.bump }}"; exit 1 ;;
+            esac
+            VERSION="${MA}.${MI}.${PA}"
+          fi
+          # Guards: versionCode must always increase; semver must be sane.
+          [[ "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "bad version"; exit 1; }
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "Releasing v${VERSION} (build number ${{ github.run_number }})"
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze (zero warnings allowed)
+        run: flutter analyze
+
+      - name: Run tests
+        run: flutter test
+
+      - name: Restore release keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          echo "${KEYSTORE_BASE64}" | base64 -d > android/app/upload-keystore.jks
+          cat > android/key.properties <<EOF
+          storeFile=upload-keystore.jks
+          storePassword=${KEYSTORE_PASSWORD}
+          keyAlias=${KEY_ALIAS}
+          keyPassword=${KEY_PASSWORD}
+          EOF
+          test -s android/app/upload-keystore.jks || { echo "keystore decode failed"; exit 1; }
+          test -f android/key.properties || { echo "key.properties missing"; exit 1; }
+          echo "keystore restored"
+
+      # Single universal APK (no --split-per-abi): one artifact, one
+      # versionCode, and the in-app updater stays simple.
+      - name: Build release APK
+        run: |
+          flutter build apk --release \
+            --build-name=${{ steps.version.outputs.version }} \
+            --build-number=${{ github.run_number }}
+
+      - name: Rename and checksum
+        run: |
+          set -euo pipefail
+          SRC=build/app/outputs/flutter-apk/app-release.apk
+          OUT=telegram-bulk-sender-v${{ steps.version.outputs.version }}.apk
+          cp "${SRC}" "${OUT}"
+          sha256sum "${OUT}" > checksums.txt
+          cat checksums.txt
+
+      - name: Verify APK is actually signed with the release key
+        run: |
+          set -euo pipefail
+          KS=android/app/upload-keystore.jks
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort | tail -n1)
+          CERT="$("$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-release.apk | grep -i 'CN=' || true)"
+          echo "${CERT}"
+          if [[ -z "${CERT}" ]]; then echo "APK is not signed"; exit 1; fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: v${{ steps.version.outputs.version }}
+          generate_release_notes: true
+          files: |
+            telegram-bulk-sender-v${{ steps.version.outputs.version }}.apk
+            checksums.txt

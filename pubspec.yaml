@@ -1,0 +1,54 @@
+name: telegram_bulk_sender
+description: "Bulk image sender for Telegram bots — send albums or single photos to multiple chats with progress, retry and rate limiting."
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.9.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # State management
+  flutter_riverpod: ^2.6.1
+  # Navigation
+  go_router: ^14.8.1
+  # Networking (Telegram Bot API + GitHub Releases)
+  dio: ^5.7.0
+  # Media
+  image_picker: ^1.1.2
+  flutter_image_compress: ^2.3.0
+  # Storage
+  flutter_secure_storage: ^9.2.4
+  shared_preferences: ^2.3.4
+  path_provider: ^2.1.5
+  # Platform integration
+  permission_handler: ^11.3.1
+  flutter_local_notifications: ^18.0.1
+  workmanager: ^0.5.2
+  flutter_foreground_task: ^8.17.0
+  package_info_plus: ^8.1.2
+  # Utils
+  crypto: ^3.0.6
+  intl: ^0.20.2
+  material_symbols_icons: ^4.2815.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+
+  fonts:
+    - family: Inter
+      fonts:
+        - asset: assets/fonts/Inter-Regular.ttf
+        - asset: assets/fonts/Inter-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Inter-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/Inter-Bold.ttf
+          weight: 700

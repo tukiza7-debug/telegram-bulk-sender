@@ -1,0 +1,248 @@
+# Telegram Bulk Sender
+
+**Send albums of photos to your Telegram chats, groups and channels — in bulk, with progress, retries and rate-limit handling.**
+
+[![Latest release](https://img.shields.io/github/v/release/tukiza7-debug/telegram-bulk-sender?include_prereleases&label=release)](https://github.com/tukiza7-debug/telegram-bulk-sender/releases/latest)
+[![Build](https://img.shields.io/github/actions/workflow/status/tukiza7-debug/telegram-bulk-sender/release.yml?branch=main&label=build)](https://github.com/tukiza7-debug/telegram-bulk-sender/actions/workflows/release.yml)
+[![License: MIT](https://img.shields.io/badge/licence-MIT-green.svg)](LICENSE)
+
+Telegram Bulk Sender is a native Android app (Flutter) that drives the
+**Telegram Bot API** to bulk-send photos: pick many images, choose the
+recipients, and let the app deliver them as albums (up to 10 per message) or
+as individual photos — with a live progress screen, pause/cancel, automatic
+HTTP 429 handling, and sending that continues in the background via a
+foreground service.
+
+## Screenshots
+
+Placeholders live in [`docs/screenshots/`](docs/screenshots/) and are named
+after the screens they show:
+
+| File | Screen |
+| --- | --- |
+| `01_onboarding.png` | Bot token onboarding |
+| `02_home.png` | Home — recipients management |
+| `03_picker.png` | Photo picker grid (reorderable) |
+| `04_review.png` | Send review (mode, caption, pacing) |
+| `05_progress.png` | Live send progress |
+| `06_settings.png` | Settings (permissions, updates, about) |
+
+## Features
+
+- **Bot token onboarding** — validate with `getMe` before saving; the token
+  is stored encrypted (`flutter_secure_storage`) and never logged.
+- **Recipients** — save any number of chat IDs or `@channelusernames`,
+  verified through `getChat` before they are saved. Add, rename, remove.
+- **Photo picking** — multi-select via the Android system Photo Picker (no
+  storage permission needed on Android 13+), grid preview, long-press drag
+  to reorder, remove individual photos.
+- **Two send modes** — `sendMediaGroup` albums (max 10 per group) or
+  `sendPhoto` one-by-one, with optional caption and configurable pacing
+  between batches.
+- **Rate-limit aware** — proactive per-chat pacing, HTTP 429 handled with
+  `retry_after`, exponential backoff for transient errors, and automatic
+  resume after network failures.
+- **Live progress** — per-photo status, success/fail counts, pause, resume,
+  cancel, and one-tap **retry of exactly what failed**.
+- **Background sending** — the whole session runs in a foreground service
+  (`dataSync` type, Android 14+ compatible) with a progress notification and
+  notification action buttons.
+- **Oversized photo handling** — photos above Telegram's 10 MB photo limit
+  are re-compressed/resized automatically before sending.
+- **In-app updates** — checks GitHub Releases (on open, manually, and every
+  6 h in the background), notifies once per version, downloads the APK with
+  progress, verifies the published SHA-256 checksum, and prompts the system
+  installer. Nothing installs silently.
+- **Send history** — a simple local record of past sessions with success and
+  failure counts.
+
+## Download & Install
+
+1. Go to [Releases](https://github.com/tukiza7-debug/telegram-bulk-sender/releases/latest).
+2. Download `telegram-bulk-sender-vX.Y.Z.apk` (universal; works on
+   `armeabi-v7a`, `arm64-v8a`, `x86_64`).
+3. Open the APK. On first install Android will ask you to allow installs
+   from this source — tap **Settings** and enable **Install unknown apps**
+   for your browser/file manager, then confirm the install.
+4. Verify the download (optional but recommended):
+
+   ```bash
+   sha256sum -c checksums.txt   # from the same release page
+   ```
+
+## How updates work
+
+The app ships with a built-in updater:
+
+- On app open, on demand from **Settings → Check for updates**, and from a
+  periodic background job (every 6 hours, network-constrained, using
+  `ETag`/`If-None-Match` so checks are cheap), the app queries the GitHub
+  Releases API.
+- When a release with a **newer semver tag** exists, you get a system
+  notification **once per version**, plus a dismissible banner on the home
+  screen. Tapping either opens the in-app Update screen (not a browser).
+- The Update screen shows the current vs. new version and the release notes,
+  then **Update now** downloads the APK, verifies its SHA-256 against the
+  published `checksums.txt`, and hands it to the system installer.
+- **Updates install over the existing app — no uninstall, no data loss.**
+  This works because every release is signed with the same key and the
+  `versionCode` (`--build-number` = CI run number) always increases. A lost
+  signing key or a reused `versionCode` would break the update path — that
+  is why both are treated as critical in the release guide below.
+- The `REQUEST_INSTALL_PACKAGES` permission is only exercised when you tap
+  **Update now**; the first time, the app explains it and sends you to the
+  system "Install unknown apps" screen. You confirm every install.
+
+## Permissions
+
+Requested in context, with an explanation before the system dialog. The app
+remains functional if you deny any of them.
+
+| Permission | When it is requested | Why |
+| --- | --- | --- |
+| `INTERNET` | Automatically (normal permission) | Talk to `api.telegram.org` and `api.github.com`. |
+| `POST_NOTIFICATIONS` (Android 13+) | Right after onboarding, with a rationale screen | Update alerts + background send progress. Denied → in-app banners only. |
+| Photo Picker (no permission) | When you tap "Select photos" | System picker; the app never needs `READ_MEDIA_IMAGES`. |
+| `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_DATA_SYNC` | Automatically (normal permissions) | Keep bulk sending alive in the background with a visible notification. |
+| `WAKE_LOCK`, `RECEIVE_BOOT_COMPLETED` | Automatically (normal permissions) | Keep the device awake during long uploads and let WorkManager restore its periodic update check after reboot. |
+| `REQUEST_INSTALL_PACKAGES` | Shown/used only on the first "Update now" | Lets the system install the downloaded update APK. Never used silently. |
+| Ignore battery optimisation | **Optional**, from Settings → Permissions | Only relevant if your system kills long background sends. |
+
+## Getting started
+
+1. **Create a bot** — in Telegram, open [@BotFather](https://t.me/BotFather),
+   send `/newbot`, and follow the prompts. Copy the token
+   (`123456789:AAH3x…`).
+2. **Paste the token** into the app on first launch. It is validated via
+   `getMe` and stored encrypted on the device.
+3. **Get a chat ID** —
+   - *Channel/group*: add the bot **as an admin** to the channel/group. Use
+     the numeric ID (large negative values like `-1001234567890`; you can
+     obtain it via @userinfobot or similar tools) or the `@channelusername`.
+   - *Private chat*: send the bot any message first (bots cannot initiate),
+     then use your numeric user ID.
+4. **Add the recipient** in the app — it is verified through `getChat`
+   before saving, so mistakes are caught early.
+
+## Usage
+
+1. **Home** → *Add recipient* (repeat for every target).
+2. **Choose photos** → multi-select, drag to reorder, remove as needed.
+3. **Continue** → pick a mode:
+   - *Album*: photos are grouped up to 10 per `sendMediaGroup`; the caption
+     is applied once per album. If Telegram rejects an album, the app
+     automatically retries its photos individually so one bad image does not
+     sink the batch.
+   - *Individual*: one `sendPhoto` per photo; the caption is applied to every
+     photo.
+4. Set an optional caption (≤ 1024 chars) and the pacing delay, then **Send**.
+5. Watch progress; pause/cancel any time. Failed pairs can be retried
+   exactly (same photo, same recipient) with one tap.
+
+**Telegram limits to keep in mind** — photos must be ≤ 10 MB (the app
+compresses larger ones automatically), albums hold at most 10 items, and
+Telegram enforces roughly 30 messages/second globally and about
+20 messages/minute per group/channel. The app paces itself proactively and
+handles HTTP 429 `retry_after` automatically, but very large jobs simply
+take time.
+
+## Build from source
+
+Requirements: Flutter SDK **3.47.5 stable** (pinned; the CI uses the same
+version) and Android SDK (API 35+ build tools).
+
+```bash
+git clone https://github.com/tukiza7-debug/telegram-bulk-sender.git
+cd telegram-bulk-sender
+flutter pub get
+flutter analyze   # must be clean
+flutter test
+flutter run       # debug build on a connected device
+flutter build apk --release
+```
+
+Local release builds without signing configuration fall back to the debug
+key; CI builds always use the real release keystore (below).
+
+## Release guide (maintainers)
+
+1. **Generate the keystore once** and keep it safe (loss = users must
+   uninstall/reinstall):
+
+   ```bash
+   keytool -genkeypair -v \
+     -keystore upload-keystore.jks \
+     -alias telegram-bulk-sender \
+     -keyalg RSA -keysize 2048 -validity 10950 \
+     -dname "CN=Telegram Bulk Sender, OU=Mobile, O=yourname, C=MY"
+   base64 -w0 upload-keystore.jks > keystore.base64
+   ```
+
+2. **Set the GitHub Actions secrets** (repo → Settings → Secrets and
+   variables → Actions):
+
+   | Secret | Value |
+   | --- | --- |
+   | `KEYSTORE_BASE64` | `base64` of `upload-keystore.jks` |
+   | `KEYSTORE_PASSWORD` | keystore password |
+   | `KEY_ALIAS` | `telegram-bulk-sender` |
+   | `KEY_PASSWORD` | key password (may equal store password) |
+
+3. **Cut a release** — either:
+   - push a tag: `git tag v1.0.1 && git push origin v1.0.1`, or
+   - run the **Release APK** workflow via *Run workflow* and choose
+     `patch` / `minor` / `major` — the workflow computes the next semver,
+     builds, and creates the tag + GitHub Release automatically.
+
+4. **Versioning rules**
+   - The git tag `vX.Y.Z` is the source of truth; CI passes
+     `--build-name=X.Y.Z --build-number=$GITHUB_RUN_NUMBER` to
+     `flutter build apk`. `versionCode` therefore equals the CI run number
+     and always increases — it can never repeat or go down.
+   - `pubspec.yaml` carries a default (`1.0.0+1`) for local builds only.
+   - The version shown in **Settings → About** always matches the GitHub
+     release tag.
+   - **No `--split-per-abi`**: a single universal APK keeps one `versionCode`
+     per release, one artifact, and an updater that cannot pick the wrong
+     ABI slice. Size difference vs. an arm64-only APK (~10%) is the price
+     for that simplicity.
+
+## Troubleshooting
+
+- **"App not installed"** — a different signing key than the installed
+  build. Uninstall the old app first; then always update via the in-app
+  updater (same key).
+- **"Chat not found" / bot cannot post** — the bot must be able to see the
+  chat. Send it a message (private chats) or add it **as an admin**
+  (channels/groups) before adding the recipient.
+- **Lots of 429 waits** — you are hitting Telegram's rate limits; increase
+  the pacing delay or send albums instead of individual photos.
+- **No update notification** — check Settings → Permissions → Notifications;
+  also confirm you are not running the same or a newer version, and that the
+  version is not in "Skip this version" (Settings → Updates → Unskip).
+- **Background sending stops** — some systems kill long jobs; enable
+  *Ignore battery optimisation* for this app (Settings → Permissions).
+
+## Privacy & Security
+
+- The bot token is stored **encrypted on the device**
+  (`flutter_secure_storage` → Android Keystore). It is never logged, never
+  committed, and only ever sent to `api.telegram.org` over HTTPS.
+- Photos go **only** to the Telegram recipients you chose.
+- The updater talks to `api.github.com` and downloads APKs from this
+  repository's Releases, verifying the published SHA-256 checksum before
+  install.
+- The app has **no analytics, no tracking, no third-party services** beyond
+  Telegram and GitHub.
+
+## Responsible use
+
+This app automates posting through the Telegram Bot API. You are responsible
+for how you use it: respect [Telegram's Terms of Service](https://telegram.org/tos)
+and bot guidelines, only send to chats where you have permission, and **do
+not spam**. Bulk messaging at scale or unsolicited content can get your bot
+banned.
+
+## Licence
+
+[MIT](LICENSE) — see [LICENSE](LICENSE).
