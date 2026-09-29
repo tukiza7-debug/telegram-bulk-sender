@@ -174,7 +174,8 @@ class UpdateCheckService {
     if (lastNotified != result.release!.tag) {
       await NotificationService.instance.showUpdateNotification(
         version: result.release!.version,
-        body: _firstLine(result.release!.body) ?? "Tap to see what's new.",
+        body: firstNotificationLine(result.release!.body) ??
+            "Tap to see what's new.",
       );
       await prefs.setString(
         AppConstants.lastNotifiedVersionKey,
@@ -190,8 +191,8 @@ class UpdateCheckService {
   }
 
   /// Notification body: skip GitHub's "What's Changed" / "Full Changelog"
-  /// headings and use the first actual bullet line.
-  static String? _firstLine(String body) {
+  /// headings and use the first actual bullet line. Public for tests.
+  static String? firstNotificationLine(String body) {
     const headings = ["what's changed", 'full changelog'];
     for (final rawLine in body.split('\n')) {
       final line = rawLine.trim();

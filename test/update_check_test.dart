@@ -281,4 +281,31 @@ void main() {
       expect(r.status, UpdateCheckStatus.available);
     }
   });
+
+  group('firstNotificationLine', () {
+    test('skips GitHub headings and returns the first bullet', () {
+      const body = """## What's Changed
+
+* Fix the send stuck bug by @user in #12
+* Improve compression by @user in #13
+
+**Full Changelog**: https://example.com""";
+      expect(
+        UpdateCheckService.firstNotificationLine(body),
+        'Fix the send stuck bug by @user in #12',
+      );
+    });
+
+    test('returns a plain first line when there are no bullets', () {
+      expect(
+        UpdateCheckService.firstNotificationLine('Straight notes here'),
+        'Straight notes here',
+      );
+    });
+
+    test('returns null for an empty body (fallback text is used)', () {
+      expect(UpdateCheckService.firstNotificationLine(''), isNull);
+      expect(UpdateCheckService.firstNotificationLine('\n \n'), isNull);
+    });
+  });
 }
