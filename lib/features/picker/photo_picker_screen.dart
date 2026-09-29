@@ -38,7 +38,7 @@ class _PhotoPickerScreenState extends ConsumerState<PhotoPickerScreen> {
       });
 
   Future<void> _pickVideos() => _runPick(() async {
-        final result = await FilePicker.pickFiles(
+        final result = await FilePicker.platform.pickFiles(
           type: FileType.video,
           allowMultiple: true,
         );
@@ -52,7 +52,7 @@ class _PhotoPickerScreenState extends ConsumerState<PhotoPickerScreen> {
       });
 
   Future<void> _pickDocuments() => _runPick(() async {
-        final result = await FilePicker.pickFiles(
+        final result = await FilePicker.platform.pickFiles(
           type: FileType.any,
           allowMultiple: true,
         );

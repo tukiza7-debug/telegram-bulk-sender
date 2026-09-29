@@ -18,7 +18,7 @@ dependencies:
   dio: ^5.7.0
   # Media (photos via system Photo Picker; videos + documents via SAF picker)
   image_picker: ^1.1.2
-  file_picker: ^11.0.3
+  file_picker: ^8.3.7
   flutter_image_compress: ^2.3.0
   # Storage
   flutter_secure_storage: ^9.2.4
