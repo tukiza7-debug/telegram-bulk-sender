@@ -993,6 +993,32 @@ int directoryBytes(List<String> paths) {
   return total;
 }
 
+/// Remembers `File.lengthSync()` results per path so UI rebuilds (grid
+/// reorder, slider drags, chips) don't re-stat every file over and over.
+/// Compute happens once per new path; stale entries are harmless.
+class FileSizeCache {
+  final Map<String, int> _cache = {};
+
+  int sizeOf(String path) {
+    return _cache.putIfAbsent(path, () {
+      try {
+        return File(path).lengthSync();
+      } on FileSystemException {
+        // File disappeared since selection; treat as 0.
+        return 0;
+      }
+    });
+  }
+
+  int totalOf(Iterable<String> paths) {
+    var total = 0;
+    for (final path in paths) {
+      total += sizeOf(path);
+    }
+    return total;
+  }
+}
+
 /// Deletes temporary files created by the sending pipeline.
 ///
 /// Called when the user CLOSES the progress screen — not before: a retry

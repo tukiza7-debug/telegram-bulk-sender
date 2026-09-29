@@ -27,6 +27,9 @@ class PhotoPickerScreen extends ConsumerStatefulWidget {
 class _PhotoPickerScreenState extends ConsumerState<PhotoPickerScreen> {
   bool _picking = false;
 
+  /// Per-file sizes are computed once and reused across rebuilds.
+  final _sizeCache = FileSizeCache();
+
   bool get _busy => _picking;
 
   Future<void> _pickPhotos() => _runPick(() async {
@@ -128,7 +131,8 @@ class _PhotoPickerScreenState extends ConsumerState<PhotoPickerScreen> {
                   photoCount: photoCount,
                   videoCount: videoCount,
                   docCount: docCount,
-                  totalBytes: directoryBytes([for (final f in files) f.path]),
+                  totalBytes: _sizeCache
+                      .totalOf([for (final f in files) f.path]),
                   onAddMore: _busy ? null : _showAddSheet,
                   adding: _picking,
                   onContinue: () => context.push('/review'),

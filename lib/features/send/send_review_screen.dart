@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -24,19 +22,17 @@ class _SendReviewScreenState extends ConsumerState<SendReviewScreen> {
   final _captionController = TextEditingController();
   double _delaySeconds = 1.5;
 
+  /// Per-file sizes are computed once and reused across rebuilds (the
+  /// slider fires a rebuild per tick, which used to re-stat every file).
+  final _sizeCache = FileSizeCache();
+
   @override
   void dispose() {
     _captionController.dispose();
     super.dispose();
   }
 
-  int _bytesOf(PendingFile file) {
-    try {
-      return File(file.path).lengthSync();
-    } on FileSystemException {
-      return 0;
-    }
-  }
+  int _bytesOf(PendingFile file) => _sizeCache.sizeOf(file.path);
 
   /// Files that exceed Telegram's per-type bot upload cap. Videos and
   /// documents cannot be compressed on-device, so they block the send
@@ -80,7 +76,7 @@ class _SendReviewScreenState extends ConsumerState<SendReviewScreen> {
     final files = ref.watch(pendingFilesProvider);
     final targets = ref.watch(targetsProvider);
     final send = ref.watch(sendProvider);
-    final totalBytes = directoryBytes([for (final f in files) f.path]);
+    final totalBytes = _sizeCache.totalOf([for (final f in files) f.path]);
 
     final photoCount = files.where((f) => f.kind == SendKind.photo).length;
     final videoCount = files.where((f) => f.kind == SendKind.video).length;
