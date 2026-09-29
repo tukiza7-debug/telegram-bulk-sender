@@ -69,8 +69,13 @@ class _UpdateScreenState extends ConsumerState<UpdateScreen> {
                       child: CircularProgressIndicator(),
                     ),
                   ),
-                UpdatePhase.upToDate || UpdatePhase.skipped => _UpToDateCard(
+                UpdatePhase.upToDate => _UpToDateCard(
                     onCheck: () => controller.checkNow(),
+                  ),
+                UpdatePhase.skipped => _SkippedCard(
+                    skippedVersion: update.skippedVersion,
+                    onCheck: () => controller.checkNow(),
+                    onUnskip: () => controller.unskip(),
                   ),
                 UpdatePhase.available ||
                 UpdatePhase.downloading ||
@@ -84,6 +89,64 @@ class _UpdateScreenState extends ConsumerState<UpdateScreen> {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _SkippedCard extends StatelessWidget {
+  const _SkippedCard({
+    required this.skippedVersion,
+    required this.onCheck,
+    required this.onUnskip,
+  });
+
+  final String? skippedVersion;
+  final VoidCallback onCheck;
+  final VoidCallback onUnskip;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(AppDimens.s16),
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surfaceContainerLow,
+            borderRadius: BorderRadius.circular(AppDimens.radiusLg),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                Symbols.skip_next_rounded,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  skippedVersion == null
+                      ? 'You skipped this version.'
+                      : 'You skipped v${skippedVersion!.replaceFirst('v', '')}. '
+                      'Unskip to see it again.',
+                  style: theme.textTheme.bodySmall,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: AppDimens.s16),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            OutlinedButton(onPressed: onCheck, child: const Text('Check again')),
+            const SizedBox(width: AppDimens.s8),
+            FilledButton.tonal(
+              onPressed: onUnskip,
+              child: const Text('Unskip this version'),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }

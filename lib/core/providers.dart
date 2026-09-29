@@ -676,16 +676,19 @@ class UpdateState {
     String? error,
     String? skippedVersion,
     bool clearError = false,
+    bool clearRelease = false,
+    bool clearSkipped = false,
     bool? installPermissionMissing,
   }) {
     return UpdateState(
       phase: phase ?? this.phase,
-      release: release ?? this.release,
+      release: clearRelease ? null : (release ?? this.release),
       currentVersion: currentVersion ?? this.currentVersion,
       downloadProgress: downloadProgress ?? this.downloadProgress,
       downloadedPath: downloadedPath ?? this.downloadedPath,
       error: clearError ? null : (error ?? this.error),
-      skippedVersion: skippedVersion ?? this.skippedVersion,
+      skippedVersion:
+          clearSkipped ? null : (skippedVersion ?? this.skippedVersion),
       installPermissionMissing:
           installPermissionMissing ?? this.installPermissionMissing,
     );
@@ -699,20 +702,17 @@ class UpdateController extends Notifier<UpdateState> {
   UpdateState build() {
     _github = GithubReleaseService();
     _loadCurrentVersion();
-    _loadSkipped();
-    return const UpdateState();
+    // Load the skipped version synchronously from the (already initialized)
+    // prefs instance — the previous async variant read a default state in
+    // the meantime, so a stored "skip" briefly looked like "no skip".
+    final skipped =
+        ref.read(sharedPreferencesProvider).getString(AppConstants.skippedVersionKey);
+    return UpdateState(skippedVersion: skipped);
   }
 
   Future<void> _loadCurrentVersion() async {
     final info = await PackageInfo.fromPlatform();
     state = state.copyWith(currentVersion: info.version);
-  }
-
-  Future<void> _loadSkipped() async {
-    final prefs = ref.read(sharedPreferencesProvider);
-    state = state.copyWith(
-      skippedVersion: prefs.getString(AppConstants.skippedVersionKey),
-    );
   }
 
   Future<void> checkNow({bool notifyIfNewer = false}) async {
@@ -845,8 +845,8 @@ class UpdateController extends Notifier<UpdateState> {
     await prefs.setString(AppConstants.lastNotifiedVersionKey, tag);
     state = state.copyWith(
       skippedVersion: tag,
-      phase: UpdatePhase.idle,
-      release: null,
+      phase: UpdatePhase.skipped,
+      clearRelease: true,
     );
   }
 
@@ -857,7 +857,7 @@ class UpdateController extends Notifier<UpdateState> {
     if (skipped != null) {
       await prefs.remove(AppConstants.lastNotifiedVersionKey);
     }
-    state = state.copyWith(skippedVersion: null);
+    state = state.copyWith(clearSkipped: true);
     await checkNow(notifyIfNewer: false);
   }
 }
