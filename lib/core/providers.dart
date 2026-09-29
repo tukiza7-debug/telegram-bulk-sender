@@ -182,9 +182,37 @@ class BotSessionController extends Notifier<BotSession?> {
   /// had been regenerated or revoked in @BotFather still showed as
   /// "connected" while every send failed with 401. Now the app only claims
   /// a connection it can actually prove.
+  ///
+  /// Hardened: on some devices flutter_secure_storage returns an empty
+  /// string (or a corrupted leftover) instead of null when nothing was ever
+  /// stored — that made a freshly installed app boot straight into a fake
+  /// "connected" home. Anything blank, unreadable or structurally
+  /// impossible is discarded, so the app always starts at "Bot not
+  /// connected" unless a real token is actually stored and verified.
   Future<void> restore() async {
-    final saved = await ref.read(tokenStoreProvider).read();
-    final token = (saved == null || saved.isEmpty) ? null : saved;
+    String? saved;
+    try {
+      saved = await ref.read(tokenStoreProvider).read();
+    } on Exception {
+      // Corrupted keystore / unreadable secure storage: treat as empty.
+      saved = null;
+    }
+
+    var token = saved?.trim();
+    if (token != null && token.isEmpty) token = null;
+
+    // Structural sanity: a bot token always contains a colon. Values like
+    // "null", "true" or other storage leftovers are garbage — remove them
+    // from storage so they cannot resurface, and start disconnected.
+    if (token != null && !BotTokenSanitizer.mightBeToken(token)) {
+      try {
+        await ref.read(tokenStoreProvider).delete();
+      } on Exception {
+        // Best effort cleanup; the in-memory session stays empty anyway.
+      }
+      token = null;
+    }
+
     if (token == null) {
       state = null;
       return;
@@ -216,7 +244,11 @@ class BotSessionController extends Notifier<BotSession?> {
       if (e.kind == TelegramErrorKind.unauthorized) {
         // The saved token is dead — stop pretending the bot is connected.
         if (state?.token == current.token) {
-          await ref.read(tokenStoreProvider).delete();
+          try {
+            await ref.read(tokenStoreProvider).delete();
+          } on Exception {
+            // Storage may be broken; the in-memory reset below still holds.
+          }
           final prefs = ref.read(sharedPreferencesProvider);
           await prefs.remove(AppConstants.botUsernameKey);
           state = null;

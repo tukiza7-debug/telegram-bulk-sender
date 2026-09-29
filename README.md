@@ -248,6 +248,13 @@ key; CI builds always use the real release keystore (below).
   above: the token stored on this device was regenerated or revoked in
   @BotFather. Tap **Connect bot** and paste the current token from
   @BotFather; recipients and history are untouched.
+- **"App shows connected right after installing/updating"** — the device
+  still holds a bot token from an earlier session (updates intentionally
+  keep it so recipients survive). Since v1.2.1 the app re-checks it on
+  every launch and discards anything blank or corrupted, so a truly fresh
+  install always starts at **Bot not connected**. To start over manually:
+  **Settings → Disconnect bot**, then **Connect bot** with your token
+  (or use **Settings → Reconnect token** to swap it in place).
 - **"App not installed"** — a different signing key than the installed
   build. Uninstall the old app first; then always update via the in-app
   updater (same key).

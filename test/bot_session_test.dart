@@ -29,6 +29,19 @@ class _MemTokenStore implements TokenStore {
   Future<void> write(String token) async => value = token;
 }
 
+/// Simulates a corrupted keystore: every storage call throws.
+class _ThrowingTokenStore implements TokenStore {
+  @override
+  Future<void> delete() async {}
+
+  @override
+  Future<String?> read() async => throw Exception('keystore corrupted');
+
+  @override
+  Future<void> write(String token) async =>
+      throw Exception('keystore corrupted');
+}
+
 /// Controllable Telegram API fake: each token maps to a behaviour.
 class _FakeApi implements TelegramApiClient {
   _FakeApi(this.behavior);
@@ -98,7 +111,7 @@ TelegramApiException _unauthorized() => TelegramApiException(
     );
 
 Future<ProviderContainer> _container({
-  required _MemTokenStore store,
+  required TokenStore store,
   required _FakeApi Function(String token) apiFor,
 }) async {
   SharedPreferences.setMockInitialValues(<String, Object>{});
@@ -132,6 +145,51 @@ void main() {
 
       expect(container.read(botSessionProvider), isNull);
       expect(api.getMeCalls, 0);
+    });
+
+    test('blank stored value (device quirk) -> not connected, not verified',
+        () async {
+      final store = _MemTokenStore()..value = '   ';
+      final api = _FakeApi(() async => _FakeApi.okBot);
+      final container = await _container(store: store, apiFor: (_) => api);
+      final notifier = container.read(botSessionProvider.notifier);
+
+      await notifier.restore();
+      await pumpEventQueue();
+
+      expect(container.read(botSessionProvider), isNull);
+      expect(api.getMeCalls, 0); // never sent to the network
+      expect(container.read(botResetNoticeProvider), isFalse);
+    });
+
+    test('garbage stored value (no colon) -> discarded and wiped', () async {
+      final store = _MemTokenStore()..value = 'null';
+      final api = _FakeApi(() async => _FakeApi.okBot);
+      final container = await _container(store: store, apiFor: (_) => api);
+      final notifier = container.read(botSessionProvider.notifier);
+
+      await notifier.restore();
+      await pumpEventQueue();
+
+      expect(container.read(botSessionProvider), isNull);
+      expect(api.getMeCalls, 0);
+      expect(store.value, isNull); // garbage removed from storage
+      expect(store.deleteCalls, 1);
+    });
+
+    test('secure storage failure -> starts disconnected instead of crashing',
+        () async {
+      final container = await _container(
+        store: _ThrowingTokenStore(),
+        apiFor: (_) => _FakeApi(() async => _FakeApi.okBot),
+      );
+      final notifier = container.read(botSessionProvider.notifier);
+
+      await notifier.restore();
+      await pumpEventQueue();
+
+      expect(container.read(botSessionProvider), isNull);
+      expect(container.read(botResetNoticeProvider), isFalse);
     });
 
     test('saved token + getMe OK -> verified session, username refreshed',

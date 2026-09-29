@@ -228,3 +228,54 @@ Pure Dart/UI change — no plugin, gradle, manifest or native code touched.
   behaviour and the new Home notice; AUDIT.md updated (this section).
 
 **Verdict: 7/7 PASS — cleared to push and tag `v1.2.0`.**
+
+---
+
+# v1.2.1 — Pre-Push Audit (7/7)
+
+**User report:** after installing, the app suddenly showed a connected bot
+even though the user had never connected one. **Root cause:** the device's
+secure storage still held a value from an earlier session, and on some
+devices/versions `flutter_secure_storage` (encryptedSharedPreferences)
+returns an empty string or a corrupted leftover instead of `null` — the old
+`restore()` treated any non-null as a live session, booting straight into a
+fake "connected" home. **Fix:** hardened `restore()` — storage reads are
+exception-safe; blank/whitespace values are ignored; any value without a
+token's structural colon signature is garbage and is deleted on the spot.
+A fresh install can now only leave "Bot not connected" unless a real,
+verified token exists.
+
+## Audit 1 — Code & architecture review — PASS
+- Diff limited to `providers.dart` restore hardening, tests, docs, version.
+- Failure paths: read throws → treated as empty; delete throws → ignored
+  (in-memory state still correct); 401 path also exception-safe now.
+
+## Audit 2 — Static analysis — PASS
+- `flutter analyze`: **0 issues**.
+
+## Audit 3 — Test suite — PASS
+- `flutter test`: **52/52** — 3 new restore cases: blank value (device
+  quirk) → disconnected without any network call; garbage value
+  ("null", no colon) → discarded AND wiped from storage; storage throwing →
+  starts disconnected instead of crashing.
+
+## Audit 4 — Security & secrets — PASS
+- No GitHub PAT and no user bot token anywhere in tracked files
+  (checked both patterns explicitly).
+
+## Audit 5 — Android / CI config & versioning — PASS
+- `pubspec.yaml` → `1.2.1+1`; versionCode = `github.run_number` strictly
+  increases; tag-push trigger + pinned Flutter 3.47.5 + signing secrets
+  unchanged and verified.
+
+## Audit 6 — Feature completeness & UX — PASS
+- Photo/video/document sending, reconnect flow, recipients/history all
+  untouched; no other code path reads the raw stored token.
+
+## Audit 7 — Release readiness — PASS
+- Change set is pure Dart (no native/plugin/gradle deltas); CI (identical
+  pinned toolchain) remains the authoritative release build.
+- README troubleshooting documents the new guarantee and the manual reset
+  path (Settings → Disconnect bot / Reconnect token).
+
+**Verdict: 7/7 PASS — cleared to push and tag `v1.2.1`.**

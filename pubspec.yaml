@@ -1,7 +1,7 @@
 name: telegram_bulk_sender
 description: "Bulk sender for Telegram bots — send photos, videos and documents to multiple chats with progress, retry and rate limiting."
 publish_to: "none"
-version: 1.2.0+1
+version: 1.2.1+1
 
 environment:
   sdk: ^3.9.0
