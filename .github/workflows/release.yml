@@ -101,11 +101,17 @@ jobs:
 
       # Single universal APK (no --split-per-abi): one artifact, one
       # versionCode, and the in-app updater stays simple.
+      # versionCode = github.run_number + 1000: if the workflow (or repo) is
+      # ever recreated, run_number resets to 1 and Android REFUSES to install
+      # an update whose versionCode went backwards. The +1000 offset keeps
+      # every build above all pre-offset installs. NEVER lower it.
       - name: Build release APK
         run: |
+          VERSION_CODE=$(( ${{ github.run_number }} + 1000 ))
+          echo "versionCode=${VERSION_CODE} (run_number ${{ github.run_number }} + 1000)"
           flutter build apk --release \
             --build-name=${{ steps.version.outputs.version }} \
-            --build-number=${{ github.run_number }}
+            --build-number=${VERSION_CODE}
 
       - name: Rename and checksum
         run: |
