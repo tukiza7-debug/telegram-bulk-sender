@@ -73,9 +73,19 @@ class _PhotoPickerScreenState extends ConsumerState<PhotoPickerScreen> {
     setState(() => _picking = true);
     try {
       await pick();
-    } on Exception {
-      // User canceled the system picker or the picker failed — keep the
-      // current selection.
+    } on Exception catch (e) {
+      // A user cancel returns null/empty instead of throwing, so anything
+      // reaching here is a real failure — tell the user instead of
+      // silently ignoring it.
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Could not open the file picker. Please try again. (${e.runtimeType})',
+            ),
+          ),
+        );
+      }
     } finally {
       if (mounted) setState(() => _picking = false);
     }
