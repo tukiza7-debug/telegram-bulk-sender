@@ -24,7 +24,13 @@ class RateLimiter {
   final Map<String, DateTime> _lastPerChat = {};
 
   /// Returns (and awaits) the delay required before sending to [chatId].
-  Future<void> acquire(String chatId) async {
+  ///
+  /// [weight] is the number of Telegram messages the request consumes.
+  /// A media-group (album) call is ONE HTTP request but Telegram counts
+  /// every item inside it toward the ~20 msgs/min per-group cap, so albums
+  /// must be weighed by their item count.
+  Future<void> acquire(String chatId, {int weight = 1}) async {
+    if (weight < 1) weight = 1;
     final current = _now();
     var earliest = _lastGlobal.add(globalInterval);
     final lastChat = _lastPerChat[chatId];
@@ -37,8 +43,10 @@ class RateLimiter {
       await _sleep(wait);
     }
     final stamp = _now();
-    _lastGlobal = stamp;
-    _lastPerChat[chatId] = stamp;
+    // Reserve the whole weight now: the next acquire must wait for the
+    // remaining (weight - 1) messages of this request as well.
+    _lastGlobal = stamp.add(globalInterval * (weight - 1));
+    _lastPerChat[chatId] = stamp.add(perChatInterval * (weight - 1));
   }
 
   /// Clears tracked timestamps (used between independent sessions).

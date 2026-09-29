@@ -83,5 +83,52 @@ void main() {
       await limiter.acquire('chat-a');
       expect(waits, isEmpty); // No wait after reset.
     });
+
+    test('an album of N items reserves N per-chat message slots', () async {
+      var now = DateTime(2025, 1, 1);
+      final waits = <Duration>[];
+      final limiter = RateLimiter(
+        globalInterval: Duration.zero,
+        perChatInterval: const Duration(seconds: 3),
+        sleep: (d) async {
+          waits.add(d);
+          now = now.add(d);
+        },
+        now: () => now,
+      );
+
+      // First chunk of 10 items goes out immediately.
+      await limiter.acquire('chat-a', weight: 10);
+      expect(waits, isEmpty);
+
+      // The next request to the same chat must wait for the 9 remaining
+      // slots of the album (27 s) plus its own 3 s interval: 30 s total —
+      // as if the album had really consumed 10 message slots.
+      await limiter.acquire('chat-a');
+      expect(waits.single, const Duration(seconds: 30));
+
+      // A different chat is unaffected by chat-a's album weight
+      // (global interval is zero here, so no wait happens at all).
+      await limiter.acquire('chat-b');
+      expect(waits, hasLength(1));
+    });
+
+    test('weight clamps to at least 1', () async {
+      var now = DateTime(2025, 1, 1);
+      final limiter = RateLimiter(
+        globalInterval: Duration.zero,
+        perChatInterval: const Duration(seconds: 3),
+        sleep: (_) async {},
+        now: () => now,
+      );
+
+      await limiter.acquire('chat-a', weight: 0);
+      now = now.add(const Duration(seconds: 2));
+      // weight 0 behaved like weight 1: only 1 s of the 3 s remain.
+      await expectLater(
+        limiter.acquire('chat-a'),
+        completes,
+      );
+    });
   });
 }

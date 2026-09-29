@@ -17,12 +17,14 @@ typedef RetryWaitListener = void Function(int seconds, String reason);
 ///  - exponential backoff for transient (5xx / network) failures
 ///  - bot token never leaked into error messages
 class TelegramApiClient {
-  TelegramApiClient(String botToken, {Dio? dio})
+  TelegramApiClient(String botToken, {Dio? dio, Future<void> Function(Duration delay)? sleep})
       : _token = botToken,
-        _dio = dio ?? _buildDio(botToken);
+        _dio = dio ?? _buildDio(botToken),
+        _sleep = sleep ?? ((d) => Future<void>.delayed(d));
 
   final String _token;
   final Dio _dio;
+  final Future<void> Function(Duration delay) _sleep;
 
   static Dio _buildDio(String botToken) {
     return Dio(
@@ -48,7 +50,7 @@ class TelegramApiClient {
 
   Future<Map<String, dynamic>> _post(
     String method,
-    FormData? data, {
+    Future<FormData> Function() buildData, {
     Map<String, dynamic>? query,
     RetryWaitListener? onWait,
   }) async {
@@ -56,9 +58,12 @@ class TelegramApiClient {
     while (true) {
       attempt++;
       try {
+        // A FormData can be consumed by exactly one request — retries must
+        // rebuild it (re-reading the file), otherwise every 429/5xx retry
+        // after the first attempt fails and the upload never succeeds.
         final response = await _dio.post<dynamic>(
           method,
-          data: data,
+          data: await buildData(),
           queryParameters: query,
         );
         final body = _decode(response);
@@ -131,13 +136,13 @@ class TelegramApiClient {
     if (ex.isRateLimited && attempt <= maxRateLimitRetries) {
       final wait = (ex.retryAfter ?? 5) + 1;
       onWait?.call(wait, 'rate limit');
-      await Future<void>.delayed(Duration(seconds: wait));
+      await _sleep(Duration(seconds: wait));
       return true;
     }
     if (ex.isTransient && attempt <= maxTransientRetries) {
       final wait = min(30, 1 << attempt) + _jitter.nextInt(2);
       onWait?.call(wait, 'server error');
-      await Future<void>.delayed(Duration(seconds: wait));
+      await _sleep(Duration(seconds: wait));
       return true;
     }
     return false;
@@ -165,15 +170,15 @@ class TelegramApiClient {
     String? caption, {
     RetryWaitListener? onWait,
   }) async {
-    final formData = FormData.fromMap(<String, dynamic>{
-      'chat_id': chatId,
-      if (caption != null && caption.isNotEmpty) 'caption': caption,
-      'photo': await MultipartFile.fromFile(
-        filePath,
-        filename: filePath.split('/').last,
-      ),
-    });
-    final body = await _post('sendPhoto', formData, onWait: onWait);
+    Future<FormData> build() async => FormData.fromMap(<String, dynamic>{
+          'chat_id': chatId,
+          if (caption != null && caption.isNotEmpty) 'caption': caption,
+          'photo': await MultipartFile.fromFile(
+            filePath,
+            filename: filePath.split('/').last,
+          ),
+        });
+    final body = await _post('sendPhoto', build, onWait: onWait);
     return ((body['result'] as Map<String, dynamic>)['message_id'] as int?) ?? 0;
   }
 
@@ -184,16 +189,16 @@ class TelegramApiClient {
     String? caption, {
     RetryWaitListener? onWait,
   }) async {
-    final formData = FormData.fromMap(<String, dynamic>{
-      'chat_id': chatId,
-      if (caption != null && caption.isNotEmpty) 'caption': caption,
-      'supports_streaming': 'true',
-      'video': await MultipartFile.fromFile(
-        filePath,
-        filename: filePath.split('/').last,
-      ),
-    });
-    final body = await _post('sendVideo', formData, onWait: onWait);
+    Future<FormData> build() async => FormData.fromMap(<String, dynamic>{
+          'chat_id': chatId,
+          if (caption != null && caption.isNotEmpty) 'caption': caption,
+          'supports_streaming': 'true',
+          'video': await MultipartFile.fromFile(
+            filePath,
+            filename: filePath.split('/').last,
+          ),
+        });
+    final body = await _post('sendVideo', build, onWait: onWait);
     return ((body['result'] as Map<String, dynamic>)['message_id'] as int?) ?? 0;
   }
 
@@ -205,15 +210,15 @@ class TelegramApiClient {
     String? caption, {
     RetryWaitListener? onWait,
   }) async {
-    final formData = FormData.fromMap(<String, dynamic>{
-      'chat_id': chatId,
-      if (caption != null && caption.isNotEmpty) 'caption': caption,
-      'document': await MultipartFile.fromFile(
-        filePath,
-        filename: filePath.split('/').last,
-      ),
-    });
-    final body = await _post('sendDocument', formData, onWait: onWait);
+    Future<FormData> build() async => FormData.fromMap(<String, dynamic>{
+          'chat_id': chatId,
+          if (caption != null && caption.isNotEmpty) 'caption': caption,
+          'document': await MultipartFile.fromFile(
+            filePath,
+            filename: filePath.split('/').last,
+          ),
+        });
+    final body = await _post('sendDocument', build, onWait: onWait);
     return ((body['result'] as Map<String, dynamic>)['message_id'] as int?) ?? 0;
   }
 
@@ -227,28 +232,34 @@ class TelegramApiClient {
     RetryWaitListener? onWait,
   }) async {
     assert(items.isNotEmpty && items.length <= SendSessionConfig.albumMax);
-    final media = <Map<String, dynamic>>[
-      for (var i = 0; i < items.length; i++)
-        <String, dynamic>{
-          'type': items[i].kind == SendKind.video ? 'video' : 'photo',
-          'media': 'attach://file$i',
-          if (i == 0 && caption != null && caption.isNotEmpty) 'caption': caption,
-        },
-    ];
-    final map = <String, dynamic>{
-      'chat_id': chatId,
-      'media': jsonEncode(media),
-    };
-    for (var i = 0; i < items.length; i++) {
-      map['file$i'] = await MultipartFile.fromFile(
-        items[i].path,
-        filename: items[i].path.split('/').last,
-      );
+    Future<FormData> build() async {
+      final media = <Map<String, dynamic>>[
+        for (var i = 0; i < items.length; i++)
+          <String, dynamic>{
+            'type': items[i].kind == SendKind.video ? 'video' : 'photo',
+            'media': 'attach://file$i',
+            if (i == 0 && caption != null && caption.isNotEmpty)
+              'caption': caption,
+          },
+      ];
+      final map = <String, dynamic>{
+        'chat_id': chatId,
+        'media': jsonEncode(media),
+      };
+      for (var i = 0; i < items.length; i++) {
+        map['file$i'] = await MultipartFile.fromFile(
+          items[i].path,
+          filename: items[i].path.split('/').last,
+        );
+      }
+      return FormData.fromMap(map);
     }
-    final body = await _post('sendMediaGroup', FormData.fromMap(map), onWait: onWait);
+
+    final body = await _post('sendMediaGroup', build, onWait: onWait);
     final result = body['result'] as List<dynamic>;
     return [
-      for (final item in result) (item as Map<String, dynamic>)['message_id'] as int? ?? 0,
+      for (final item in result)
+        (item as Map<String, dynamic>)['message_id'] as int? ?? 0,
     ];
   }
 

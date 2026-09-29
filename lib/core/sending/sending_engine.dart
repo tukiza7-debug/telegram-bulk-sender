@@ -255,7 +255,7 @@ class SendingEngine {
       }
       if (chunk.isEmpty) continue;
 
-      await _limiter.acquire(target.chatId);
+      await _limiter.acquire(target.chatId, weight: chunk.length);
       if (!await _sendChunkAsAlbum(chunk)) {
         // Fall back to per-file so one bad image doesn't fail all 10.
         for (final chunkItem in chunk) {
