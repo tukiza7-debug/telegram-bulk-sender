@@ -16,6 +16,10 @@ abstract final class AppConstants {
   static const String targetsKey = 'targets.v1';
   static const String historyKey = 'history.v1';
   static const String etagKey = 'update.etag';
+
+  /// Cached parsed release (JSON) stored together with [etagKey] so a 304
+  /// answer can still be evaluated instead of being read as "no update".
+  static const String lastReleaseKey = 'update.lastRelease';
   static const String lastNotifiedVersionKey = 'update.lastNotifiedVersion';
   static const String skippedVersionKey = 'update.skippedVersion';
   static const String botUsernameKey = 'bot.username';

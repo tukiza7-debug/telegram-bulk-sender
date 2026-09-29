@@ -69,7 +69,7 @@ class _UpdateScreenState extends ConsumerState<UpdateScreen> {
                       child: CircularProgressIndicator(),
                     ),
                   ),
-                UpdatePhase.upToDate => _UpToDateCard(
+                UpdatePhase.upToDate || UpdatePhase.skipped => _UpToDateCard(
                     onCheck: () => controller.checkNow(),
                   ),
                 UpdatePhase.available ||

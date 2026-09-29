@@ -568,7 +568,7 @@ final sendProvider =
 // Updates
 // ---------------------------------------------------------------------------
 
-enum UpdatePhase { idle, checking, available, upToDate, downloading, verifying, ready, installing, error }
+enum UpdatePhase { idle, checking, available, upToDate, skipped, downloading, verifying, ready, installing, error }
 
 class UpdateState {
   const UpdateState({
@@ -641,19 +641,47 @@ class UpdateController extends Notifier<UpdateState> {
 
   Future<void> checkNow({bool notifyIfNewer = false}) async {
     state = state.copyWith(phase: UpdatePhase.checking, clearError: true);
-    final release = await UpdateCheckService.run(notify: notifyIfNewer);
-    if (release == null) {
-      state = state.copyWith(phase: UpdatePhase.upToDate);
-    } else {
-      state = state.copyWith(phase: UpdatePhase.available, release: release);
+    final result = await UpdateCheckService.run(
+      notify: notifyIfNewer,
+      force: true, // manual check must not trust a cached ETag
+    );
+    switch (result.status) {
+      case UpdateCheckStatus.available:
+        state = state.copyWith(
+          phase: UpdatePhase.available,
+          release: result.release,
+        );
+      case UpdateCheckStatus.skipped:
+        state = state.copyWith(
+          phase: UpdatePhase.skipped,
+          release: result.release,
+        );
+      case UpdateCheckStatus.upToDate:
+        state = state.copyWith(phase: UpdatePhase.upToDate);
+      case UpdateCheckStatus.failed:
+        state = state.copyWith(
+          phase: UpdatePhase.error,
+          error: "Couldn't check for updates. Check your connection and try "
+              'again.',
+        );
     }
   }
 
   Future<void> refreshFromBackgroundCheck() async {
-    final release = await UpdateCheckService.run(notify: false);
-    if (release != null) {
-      state = state.copyWith(phase: UpdatePhase.available, release: release);
+    final result = await UpdateCheckService.run(notify: false);
+    if (result.status == UpdateCheckStatus.available) {
+      state = state.copyWith(
+        phase: UpdatePhase.available,
+        release: result.release,
+      );
+    } else if (result.status == UpdateCheckStatus.skipped) {
+      state = state.copyWith(
+        phase: UpdatePhase.skipped,
+        release: result.release,
+      );
     }
+    // upToDate / failed leave the current banner state untouched: a failed
+    // silent check must not wipe a banner the user can still act on.
   }
 
   Future<void> download() async {
