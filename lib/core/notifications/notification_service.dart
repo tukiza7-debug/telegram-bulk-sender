@@ -29,6 +29,22 @@ class NotificationService {
     await _createChannels();
   }
 
+  /// Route payload the app was LAUNCHED from, when a notification tap
+  /// started a killed process. Must be called after [init]; taps on an
+  /// already-running app go through onDidReceiveNotificationResponse
+  /// instead. Returns null for normal launches.
+  Future<String?> initialPayload() async {
+    try {
+      final details = await _plugin.getNotificationAppLaunchDetails();
+      if (details == null || !details.didNotificationLaunchApp) return null;
+      final payload = details.notificationResponse?.payload;
+      return (payload == null || payload.isEmpty) ? null : payload;
+    } on Exception {
+      // Missing plugin/platform differences must never block startup.
+      return null;
+    }
+  }
+
   Future<void> _createChannels() async {
     final android = _plugin
         .resolvePlatformSpecificImplementation<
