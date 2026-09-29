@@ -2,10 +2,12 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/services.dart' show PlatformException;
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'background/send_task.dart';
@@ -989,4 +991,37 @@ int directoryBytes(List<String> paths) {
     }
   }
   return total;
+}
+
+/// Deletes temporary files created by the sending pipeline.
+///
+/// Called when the user CLOSES the progress screen — not before: a retry
+/// of failed files needs the (compressed) files referenced by the snapshot
+/// to still exist. Covers:
+///  - compressed photos in `<cache>/prepared/`
+///  - SAF picker copies (`FilePicker.clearTemporaryFiles`)
+/// Downloads in `<cache>/updates/` are cleaned separately at startup.
+Future<void> cleanupSendTempFiles() async {
+  try {
+    final dir = await getTemporaryDirectory();
+    final prepared = Directory('${dir.path}/prepared');
+    if (prepared.existsSync()) {
+      for (final entity in prepared.listSync()) {
+        try {
+          entity.deleteSync(recursive: true);
+        } on FileSystemException {
+          // Best effort.
+        }
+      }
+    }
+  } on Exception {
+    // path_provider unavailable — nothing to clean.
+  }
+  try {
+    await FilePicker.platform.clearTemporaryFiles();
+  } on Exception {
+    // Not supported on every platform/version.
+  } catch (_) {
+    // UnsupportedError on some platforms — ignore.
+  }
 }

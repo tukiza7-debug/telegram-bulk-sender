@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -19,6 +20,16 @@ class SendProgressScreen extends ConsumerStatefulWidget {
   @override
   ConsumerState<SendProgressScreen> createState() =>
       _SendProgressScreenState();
+}
+
+/// Closes the session: clears state and deletes the temp files created by
+/// the send (compressed photos, picker copies). Safe to call only AFTER the
+/// run is finished — retries need those files.
+void _closeSession(WidgetRef ref, BuildContext context) {
+  ref.read(sendProvider.notifier).clearFinished();
+  ref.read(pendingFilesProvider.notifier).clear();
+  unawaited(cleanupSendTempFiles());
+  context.go('/');
 }
 
 class _SendProgressScreenState extends ConsumerState<SendProgressScreen> {
@@ -72,11 +83,7 @@ class _SendProgressScreenState extends ConsumerState<SendProgressScreen> {
           if (finished)
             IconButton(
               tooltip: 'Close',
-              onPressed: () {
-                ref.read(sendProvider.notifier).clearFinished();
-                ref.read(pendingFilesProvider.notifier).clear();
-                context.go('/');
-              },
+              onPressed: () => _closeSession(ref, context),
               icon: const Icon(Symbols.close_rounded),
             ),
         ],
@@ -208,11 +215,7 @@ class _Controls extends ConsumerWidget {
               ),
             ),
           TextButton(
-            onPressed: () {
-              ref.read(sendProvider.notifier).clearFinished();
-              ref.read(pendingFilesProvider.notifier).clear();
-              context.go('/');
-            },
+            onPressed: () => _closeSession(ref, context),
             child: const Text('Back to home'),
           ),
         ],
