@@ -76,8 +76,14 @@ class _TargetEditorSheetState extends ConsumerState<_TargetEditorSheet> {
     }
     try {
       final api = TelegramApiClient(token);
-      final chat = await api.getChat(input);
-      api.dispose();
+      TgChat chat;
+      try {
+        chat = await api.getChat(input);
+      } finally {
+        // Closed on both paths — an error during verify used to leak the
+        // Dio client (and its sockets).
+        api.dispose();
+      }
       if (!mounted) return;
       setState(() => _verified = chat);
     } on TelegramApiException catch (e) {
@@ -98,7 +104,9 @@ class _TargetEditorSheetState extends ConsumerState<_TargetEditorSheet> {
       } else {
         final chat = _verified;
         if (chat == null) return;
-        await ref.read(targetsProvider.notifier).add(chat.chatId, _clientFor(chat));
+        // The chat was already verified via getChat above — no second
+        // network call, no extra client.
+        await ref.read(targetsProvider.notifier).addVerified(chat);
       }
       if (!mounted) return;
       Navigator.of(context).pop();
@@ -108,11 +116,6 @@ class _TargetEditorSheetState extends ConsumerState<_TargetEditorSheet> {
     } finally {
       if (mounted) setState(() => _saving = false);
     }
-  }
-
-  TelegramApiClient _clientFor(TgChat chat) {
-    final token = ref.read(botSessionProvider)!.token;
-    return TelegramApiClient(token);
   }
 
   bool get _canSave {

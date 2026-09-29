@@ -112,6 +112,19 @@ class TargetsController extends Notifier<List<TgChat>> {
     }
   }
 
+  /// Saves an already-verified chat (the editor sheet resolved it with
+  /// getChat) without a second network round-trip.
+  Future<void> addVerified(TgChat chat) async {
+    if (state.any((t) => t.chatId == chat.chatId)) {
+      throw TelegramApiException(
+        kind: TelegramErrorKind.badRequest,
+        description: 'Already saved',
+      );
+    }
+    state = [...state, chat];
+    await _persist(state);
+  }
+
   Future<void> remove(TgChat target) async {
     final targets = state.where((t) => t.chatId != target.chatId).toList();
     state = targets;
@@ -290,12 +303,15 @@ class BotSessionController extends Notifier<BotSession?> {
         description: api.sanitize(e.description),
         retryAfter: e.retryAfter,
       );
+    } finally {
+      // The client must be closed on BOTH the success and error paths —
+      // a leaking Dio client held sockets open after every failed connect.
+      api.dispose();
     }
     await ref.read(tokenStoreProvider).write(token);
     final prefs = ref.read(sharedPreferencesProvider);
     await prefs.setString(AppConstants.botUsernameKey, bot.username);
     state = BotSession(token: token, status: BotLinkStatus.verified);
-    api.dispose();
     ref.invalidate(botUsernameProvider);
     ref.read(botResetNoticeProvider.notifier).state = false;
     return bot;
