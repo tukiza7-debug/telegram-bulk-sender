@@ -115,6 +115,12 @@ class SendingEngine {
 
   bool _pauseRequested = false;
   bool _cancelRequested = false;
+
+  /// Set when Telegram rejects the token (401) mid-run. Every remaining
+  /// item is marked failed with a clear message instead of silently
+  /// retrying against a dead token.
+  String? _fatalError;
+
   List<SendItemState> _liveItems = const [];
   SendProgressSnapshot _snapshot =
       const SendProgressSnapshot(items: [], phase: SendPhase.idle);
@@ -178,7 +184,15 @@ class SendingEngine {
     }
 
     for (final item in _liveItems) {
-      if (!item.status.isFinal) item.status = SendItemStatus.canceled;
+      if (!item.status.isFinal) {
+        // An invalidated token fails the rest of the run with a message the
+        // user can act on; anything else counts as canceled.
+        item
+          ..status = _fatalError != null
+              ? SendItemStatus.failed
+              : SendItemStatus.canceled
+          ..error = _fatalError;
+      }
     }
     _snapshot = _current(
       _cancelRequested ? SendPhase.canceled : SendPhase.finished,
@@ -292,8 +306,26 @@ class SendingEngine {
       }
       _emit(_current(_snapshot.phase));
       return true;
-    } on TelegramApiException {
+    } on TelegramApiException catch (e) {
+      if (e.kind == TelegramErrorKind.unauthorized) {
+        // A dead token will fail every per-file fallback too — stop here.
+        _fatalError ??= e.friendlyMessage;
+        _cancelRequested = true;
+        for (final item in chunk) {
+          if (!item.status.isFinal) {
+            item
+              ..status = SendItemStatus.failed
+              ..error = e.friendlyMessage;
+          }
+        }
+        _emit(_current(_snapshot.phase));
+        return true; // skip the per-file fallback; the run stops anyway
+      }
       return false; // caller falls back to individual sends
+    } on Exception {
+      // A FileSystemException / StateError inside the gateway used to kill
+      // the whole run — degrade to per-file sends instead.
+      return false;
     }
   }
 
@@ -358,10 +390,15 @@ class SendingEngine {
         ..status = SendItemStatus.success
         ..error = null;
     } on TelegramApiException catch (e) {
+      if (e.kind == TelegramErrorKind.unauthorized) {
+        _fatalError ??= e.friendlyMessage;
+        _cancelRequested = true;
+      }
       // Photos with dimensions Telegram refuses (extremely small/large or
       // aspect ratios it cannot process) still make valid documents —
       // retry that exact file via sendDocument before giving up.
       if (item.kind == SendKind.photo &&
+          e.kind != TelegramErrorKind.unauthorized &&
           e.description.contains('PHOTO_INVALID_DIMENSIONS')) {
         try {
           await _gateway.sendDocument(

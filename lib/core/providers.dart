@@ -420,6 +420,26 @@ class SendController extends Notifier<SendUiState> {
           inService: true,
         );
       }
+      return;
+    }
+    // The service is gone but a stale snapshot may still claim a live run
+    // (process killed mid-send, Android 15 dataSync timeout, crash…).
+    // Mark it interrupted so the UI leaves the running state and the user
+    // can start again.
+    final raw =
+        await FlutterForegroundTask.getData<String>(key: AppConstants.fgsSnapshotKey);
+    if (raw == null) return;
+    final snapshot = SendProgressSnapshot.decode(raw);
+    if (snapshot.phase == SendPhase.running ||
+        snapshot.phase == SendPhase.paused) {
+      state = state.copyWith(
+        snapshot: snapshot.copyWith(
+          phase: SendPhase.canceled,
+          waitingMessage: 'Sending was interrupted before it finished. '
+              'Use "Retry failed" to send the missing files.',
+        ),
+        inService: false,
+      );
     }
   }
 

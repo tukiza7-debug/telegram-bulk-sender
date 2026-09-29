@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:telegram_bulk_sender/core/network/telegram_api_client.dart'
     show RetryWaitListener;
@@ -7,7 +9,13 @@ import 'package:telegram_bulk_sender/core/sending/rate_limiter.dart';
 import 'package:telegram_bulk_sender/core/sending/sending_engine.dart';
 
 class FakeGateway implements TelegramGateway {
-  FakeGateway({this.failAlbumOnceFor, this.rateLimitTimes = 0, this.photoFailure});
+  FakeGateway({
+    this.failAlbumOnceFor,
+    this.rateLimitTimes = 0,
+    this.photoFailure,
+    this.albumFailure,
+    this.unauthorized = false,
+  });
 
   final List<String> sentPhotos = [];
   final List<String> sentVideos = [];
@@ -27,6 +35,16 @@ class FakeGateway implements TelegramGateway {
   final Set<String> _failedAlbumChats = {};
   int _rateLimitedCalls = 0;
 
+  /// Thrown by sendMediaGroup on every call (any exception type) — used to
+  /// test the catch-all fallback.
+  final Exception? albumFailure;
+
+  /// When true, every send fails with an unauthorized error, simulating a
+  /// token revoked mid-run.
+  final bool unauthorized;
+
+  bool _unauthorizedNotified = false;
+
   @override
   Future<void> sendPhoto(
     String chatId,
@@ -34,6 +52,14 @@ class FakeGateway implements TelegramGateway {
     String? caption, {
     RetryWaitListener? onWait,
   }) async {
+    if (unauthorized && !_unauthorizedNotified) {
+      _unauthorizedNotified = true;
+      throw TelegramApiException(
+        kind: TelegramErrorKind.unauthorized,
+        statusCode: 401,
+        description: 'Unauthorized',
+      );
+    }
     final failure = photoFailure;
     if (failure != null) {
       throw TelegramApiException(
@@ -78,6 +104,15 @@ class FakeGateway implements TelegramGateway {
     String? caption, {
     RetryWaitListener? onWait,
   }) async {
+    if (unauthorized) {
+      throw TelegramApiException(
+        kind: TelegramErrorKind.unauthorized,
+        statusCode: 401,
+        description: 'Unauthorized',
+      );
+    }
+    final failure = albumFailure;
+    if (failure != null) throw failure;
     sentAlbums.add([for (final item in items) item.path]);
     sentAlbumKinds.add([for (final item in items) item.kind.name]);
     final trigger = failAlbumOnceFor;
@@ -357,6 +392,55 @@ void main() {
           reason: 'sendPhoto kept failing');
       expect(gateway.sentDocuments, paths,
           reason: 'the same file must go out via sendDocument');
+    });
+
+    test('a non-Telegram exception in an album falls back to per-file sends',
+        () async {
+      final gateway = FakeGateway(
+        albumFailure: const FileSystemException('file vanished', '/tmp/a.jpg'),
+      );
+      final paths = ['/tmp/a.jpg', '/tmp/b.jpg', '/tmp/c.jpg'];
+      final engine = SendingEngine(
+        gateway: gateway,
+        config: config(paths: paths, targetCount: 1),
+        sleep: instantSleep,
+        rateLimiter: RateLimiter(sleep: instantSleep),
+      );
+
+      final result = await engine.run();
+
+      expect(result.phase, SendPhase.finished,
+          reason: 'a FileSystemException must not abort the run');
+      expect(gateway.sentPhotos, paths,
+          reason: 'the chunk must be retried file by file');
+      expect(result.successCount, 3);
+    });
+
+    test('unauthorized stops the run and fails the remaining items',
+        () async {
+      final gateway = FakeGateway(unauthorized: true);
+      final paths = [
+        for (var i = 0; i < 25; i++) '/tmp/p$i.jpg',
+      ];
+      final engine = SendingEngine(
+        gateway: gateway,
+        config: config(paths: paths, targetCount: 2),
+        sleep: instantSleep,
+        rateLimiter: RateLimiter(sleep: instantSleep),
+      );
+
+      final result = await engine.run();
+
+      expect(result.successCount, 0);
+      expect(result.failedCount, result.total,
+          reason: 'every item is failed with a clear message');
+      final unauthorizedItems = result.items
+          .where((i) =>
+              i.status == SendItemStatus.failed &&
+              (i.error ?? '').contains('Reconnect'))
+          .length;
+      expect(unauthorizedItems, result.total,
+          reason: 'the message must tell the user to reconnect the bot');
     });
   });
 }
