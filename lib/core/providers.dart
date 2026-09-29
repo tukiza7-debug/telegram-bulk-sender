@@ -492,24 +492,48 @@ class SendController extends Notifier<SendUiState> {
     _localEngine = engine;
     state = state.copyWith(starting: false);
 
+    // Run in the background so the UI can navigate to /progress right away;
+    // history is persisted inside _runLocalFallback once the run settles.
+    unawaited(_runLocalFallback(engine, config, api));
+  }
+
+  Future<void> _runLocalFallback(
+    SendingEngine engine,
+    SendSessionConfig config,
+    TelegramApiClient api,
+  ) async {
     final startedAt = DateTime.now().millisecondsSinceEpoch;
-    final snapshot = await engine.run();
-    await ref.read(historyStoreProvider).add(
-          HistoryEntry(
-            id: '$startedAt',
-            startedAtMs: startedAt,
-            finishedAtMs: DateTime.now().millisecondsSinceEpoch,
-            mode: config.mode,
-            targetTitles: [for (final t in config.targets) t.title],
-            total: snapshot.total,
-            success: snapshot.successCount,
-            failed: snapshot.failedCount,
-            errors: [
-              for (final item in snapshot.items)
-                if (item.error != null) '${item.error}',
-            ],
-          ),
-        );
+    try {
+      final snapshot = await engine.run();
+      try {
+        await ref.read(historyStoreProvider).add(
+              HistoryEntry(
+                id: '$startedAt',
+                startedAtMs: startedAt,
+                finishedAtMs: DateTime.now().millisecondsSinceEpoch,
+                mode: config.mode,
+                targetTitles: [for (final t in config.targets) t.title],
+                total: snapshot.total,
+                success: snapshot.successCount,
+                failed: snapshot.failedCount,
+                errors: [
+                  for (final item in snapshot.items)
+                    if (item.error != null) '${item.error}',
+                ],
+              ),
+            );
+      } finally {
+        api.dispose();
+        // Notify history + any other listeners that the session settled.
+        SendEventBus.instance.push(snapshot);
+      }
+    } on Exception catch (e) {
+      api.dispose();
+      state = state.copyWith(
+        fatalError: 'Sending failed unexpectedly: $e',
+        starting: false,
+      );
+    }
   }
 
   void pause() {
@@ -814,8 +838,23 @@ final updateProvider =
 // ---------------------------------------------------------------------------
 
 class HistoryController extends Notifier<List<HistoryEntry>> {
+  StreamSubscription<SendProgressSnapshot>? _sub;
+
   @override
-  List<HistoryEntry> build() => ref.watch(historyStoreProvider).load();
+  List<HistoryEntry> build() {
+    ref.onDispose(() => _sub?.cancel());
+    // History is written by the foreground-service isolate (and the
+    // workmanager isolate) through their own SharedPreferences instances.
+    // When their final snapshot arrives on the event bus, reload from disk
+    // instead of reading a stale in-memory cache.
+    _sub = SendEventBus.instance.stream.listen((snapshot) {
+      if (snapshot.phase == SendPhase.finished ||
+          snapshot.phase == SendPhase.canceled) {
+        refresh();
+      }
+    });
+    return ref.watch(historyStoreProvider).load();
+  }
 
   Future<void> clear() async {
     await ref.read(historyStoreProvider).clear();
@@ -823,6 +862,7 @@ class HistoryController extends Notifier<List<HistoryEntry>> {
   }
 
   void refresh() {
+    ref.read(sharedPreferencesProvider).reload();
     state = ref.read(historyStoreProvider).load();
   }
 }
