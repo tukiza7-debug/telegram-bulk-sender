@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../constants.dart';
 import '../network/telegram_api_client.dart';
+import '../sending/image_preparation.dart';
 import '../sending/models.dart';
 import '../sending/sending_engine.dart';
 import '../storage/history_store.dart';
@@ -41,6 +42,11 @@ class SendTaskHandler extends TaskHandler {
     final engine = SendingEngine(
       gateway: TelegramGatewayImpl(api),
       config: config,
+      // Oversized photos (>10 MB) and non-JPEG formats (HEIC/HEIF/BMP) are
+      // compressed/re-encoded before upload. The task isolate runs inside a
+      // full FlutterEngine, so flutter_image_compress platform channels work
+      // here exactly as in the main isolate.
+      prepare: (path) => ImagePreparer.prepare(path),
       onSnapshot: (snapshot) async {
         await FlutterForegroundTask.saveData(
           key: AppConstants.fgsSnapshotKey,

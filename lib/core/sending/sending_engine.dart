@@ -358,6 +358,29 @@ class SendingEngine {
         ..status = SendItemStatus.success
         ..error = null;
     } on TelegramApiException catch (e) {
+      // Photos with dimensions Telegram refuses (extremely small/large or
+      // aspect ratios it cannot process) still make valid documents —
+      // retry that exact file via sendDocument before giving up.
+      if (item.kind == SendKind.photo &&
+          e.description.contains('PHOTO_INVALID_DIMENSIONS')) {
+        try {
+          await _gateway.sendDocument(
+            item.targetChatId, item.path, config.caption, onWait: null);
+          item
+            ..status = SendItemStatus.success
+            ..error = null;
+          _emit(_current(_snapshot.phase));
+          return;
+        } on Exception catch (fallbackError) {
+          item
+            ..status = SendItemStatus.failed
+            ..error = fallbackError is TelegramApiException
+                ? fallbackError.friendlyMessage
+                : 'Unexpected error: $fallbackError';
+          _emit(_current(_snapshot.phase));
+          return;
+        }
+      }
       item
         ..status = SendItemStatus.failed
         ..error = e.friendlyMessage;

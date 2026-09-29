@@ -7,7 +7,7 @@ import 'package:telegram_bulk_sender/core/sending/rate_limiter.dart';
 import 'package:telegram_bulk_sender/core/sending/sending_engine.dart';
 
 class FakeGateway implements TelegramGateway {
-  FakeGateway({this.failAlbumOnceFor, this.rateLimitTimes = 0});
+  FakeGateway({this.failAlbumOnceFor, this.rateLimitTimes = 0, this.photoFailure});
 
   final List<String> sentPhotos = [];
   final List<String> sentVideos = [];
@@ -15,6 +15,11 @@ class FakeGateway implements TelegramGateway {
   final List<List<String>> sentAlbums = [];
   final List<List<String>> sentAlbumKinds = [];
   final int rateLimitTimes;
+
+  /// When set, every sendPhoto for this description fails with a
+  /// TelegramApiException carrying that description (e.g.
+  /// 'PHOTO_INVALID_DIMENSIONS').
+  final String? photoFailure;
 
   /// When set, the first album call for this chat fails (simulating one bad
   /// file) and the caller falls back to individual sends.
@@ -29,6 +34,14 @@ class FakeGateway implements TelegramGateway {
     String? caption, {
     RetryWaitListener? onWait,
   }) async {
+    final failure = photoFailure;
+    if (failure != null) {
+      throw TelegramApiException(
+        kind: TelegramErrorKind.badRequest,
+        statusCode: 400,
+        description: failure,
+      );
+    }
     // Simulates the real client: 429 is surfaced via onWait, retried
     // transparently, and the request eventually succeeds.
     if (_rateLimitedCalls < rateLimitTimes) {
@@ -314,6 +327,36 @@ void main() {
       expect(gateway.sentAlbums[0], paths);
       expect(gateway.sentAlbumKinds[0], ['photo', 'video', 'photo']);
       expect(engine.snapshot.successCount, 3);
+    });
+
+    test('a photo with invalid dimensions is retried as a document',
+        () async {
+      final gateway = FakeGateway(
+        photoFailure: 'Bad Request: wrong file identifier/HTTP URL specified'
+            ' PHOTO_INVALID_DIMENSIONS',
+      );
+      final paths = ['/tmp/weird.png'];
+      final engine = SendingEngine(
+        gateway: gateway,
+        config: config(
+          paths: paths,
+          targetCount: 1,
+          mode: SendMode.individual,
+          kinds: const [SendKind.photo],
+        ),
+        sleep: instantSleep,
+        rateLimiter: RateLimiter(sleep: instantSleep),
+      );
+
+      await engine.run();
+
+      expect(engine.snapshot.successCount, 1,
+          reason: 'the sendDocument fallback must rescue the file');
+      expect(engine.snapshot.failedCount, 0);
+      expect(gateway.sentPhotos, isEmpty,
+          reason: 'sendPhoto kept failing');
+      expect(gateway.sentDocuments, paths,
+          reason: 'the same file must go out via sendDocument');
     });
   });
 }

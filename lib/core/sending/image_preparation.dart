@@ -8,15 +8,25 @@ import 'package:path_provider/path_provider.dart';
 class ImagePreparer {
   static const int maxBytes = 10 * 1024 * 1024;
 
-  /// Returns a path that is guaranteed to be <= 10 MB.
-  /// If [path] already fits, it is returned unchanged.
+  /// Formats Telegram's sendPhoto pipeline does not reliably accept.
+  /// They are re-encoded to JPEG regardless of file size.
+  static const _reencodeExtensions = {'heic', 'heif', 'bmp'};
+
+  /// Returns a path that is guaranteed to be <= 10 MB and, for HEIC/HEIF/BMP
+  /// inputs, a JPEG. If [path] already fits and is a supported format, it is
+  /// returned unchanged.
   static Future<String> prepare(String path) async {
     final file = File(path);
     if (!file.existsSync()) {
       throw StateError('Selected file does not exist: $path');
     }
     var length = file.lengthSync();
-    if (length <= maxBytes) return path;
+
+    final extension =
+        path.contains('.') ? path.split('.').last.toLowerCase() : '';
+    final needsReencode = _reencodeExtensions.contains(extension);
+
+    if (length <= maxBytes && !needsReencode) return path;
 
     final target = await _tempCopyPath(path);
     var quality = 85;
@@ -58,6 +68,12 @@ class ImagePreparer {
         format: CompressFormat.jpeg,
       );
       if (fallback == null || File(fallback.path).lengthSync() > maxBytes) {
+        // A HEIC/HEIF/BMP that still cannot be re-encoded would likely be
+        // rejected by sendPhoto — surface it as a failed prepare instead of
+        // uploading a file Telegram refuses.
+        if (needsReencode) {
+          throw StateError('Could not re-encode .$extension photo to JPEG');
+        }
         return path; // Let Telegram reject it with a clear error.
       }
       return fallback.path;
