@@ -294,8 +294,21 @@ class SendingEngine {
       }
 
       final chunk = <SendItemState>[];
-      while (chunk.length < SendSessionConfig.albumMax &&
-          index < targetItems.length) {
+      // Count the pending media items ahead (up to the next document) to
+      // balance the last two chunks: 11 items would otherwise become a full
+      // 10-album plus a 1-item "album" — and sendMediaGroup needs 2–10
+      // items. 11 -> 6 + 5 keeps every chunk valid.
+      var remaining = 0;
+      for (var j = index; j < targetItems.length; j++) {
+        final n = targetItems[j];
+        if (n.kind == SendKind.document) break;
+        if (n.status == SendItemStatus.pending) remaining++;
+      }
+      var cap = SendSessionConfig.albumMax;
+      if (remaining == SendSessionConfig.albumMax + 1) {
+        cap = (remaining / 2).ceil();
+      }
+      while (chunk.length < cap && index < targetItems.length) {
         final next = targetItems[index];
         if (next.kind == SendKind.document) break; // handled on its own
         if (next.status == SendItemStatus.pending) chunk.add(next);
@@ -303,13 +316,18 @@ class SendingEngine {
       }
       if (chunk.isEmpty) continue;
 
-      await _limiter.acquire(target.chatId, weight: chunk.length);
-      if (!await _sendChunkAsAlbum(chunk)) {
-        // Fall back to per-file so one bad image doesn't fail all 10.
-        for (final chunkItem in chunk) {
-          if (_cancelRequested) return;
-          await _drainPause();
-          await _sendOne(chunkItem);
+      if (chunk.length == 1) {
+        // A 1-item chunk cannot be a media group — send it individually.
+        await _sendOne(chunk.single);
+      } else {
+        await _limiter.acquire(target.chatId, weight: chunk.length);
+        if (!await _sendChunkAsAlbum(chunk)) {
+          // Fall back to per-file so one bad image doesn't fail all 10.
+          for (final chunkItem in chunk) {
+            if (_cancelRequested) return;
+            await _drainPause();
+            await _sendOne(chunkItem);
+          }
         }
       }
 

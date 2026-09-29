@@ -351,9 +351,50 @@ void main() {
       await engine.run();
 
       expect(gateway.sentDocuments.length, 2);
-      expect(gateway.sentAlbums.length, 1); // only the photo album
-      expect(gateway.sentAlbums[0].length, 1);
+      // A lone photo cannot form a media group — sendPhoto is used instead.
+      expect(gateway.sentAlbums, isEmpty);
+      expect(gateway.sentPhotos, ['/tmp/photo.jpg']);
       expect(engine.snapshot.successCount, 3);
+    });
+
+    test('11 media items are split into balanced 6 + 5 albums', () async {
+      final gateway = FakeGateway();
+      final paths = [for (var i = 0; i < 11; i++) '/tmp/b$i.jpg'];
+      final engine = SendingEngine(
+        gateway: gateway,
+        config: config(paths: paths, targetCount: 1),
+        sleep: instantSleep,
+        rateLimiter: RateLimiter(sleep: instantSleep),
+        emitThrottle: Duration.zero,
+      );
+
+      await engine.run();
+
+      expect(gateway.sentAlbums.length, 2);
+      expect(gateway.sentAlbums[0].length, 6);
+      expect(gateway.sentAlbums[1].length, 5);
+      expect(engine.snapshot.successCount, 11);
+    });
+
+    test('21 media items are split into 10 + 6 + 5 albums', () async {
+      final gateway = FakeGateway();
+      final paths = [for (var i = 0; i < 21; i++) '/tmp/c$i.jpg'];
+      final engine = SendingEngine(
+        gateway: gateway,
+        config: config(paths: paths, targetCount: 1),
+        sleep: instantSleep,
+        rateLimiter: RateLimiter(sleep: instantSleep),
+        emitThrottle: Duration.zero,
+      );
+
+      await engine.run();
+
+      expect(gateway.sentAlbums.length, 3);
+      expect(
+        gateway.sentAlbums.map((a) => a.length).toList(),
+        [10, 6, 5],
+        reason: 'no chunk may end up with a single item',
+      );
     });
 
     test('mixed photo+video albums preserve order and kinds', () async {
