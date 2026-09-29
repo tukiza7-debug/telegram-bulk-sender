@@ -212,6 +212,7 @@ key; CI builds always use the real release keystore (below).
    | `KEYSTORE_PASSWORD` | keystore password |
    | `KEY_ALIAS` | `telegram-bulk-sender` |
    | `KEY_PASSWORD` | key password (may equal store password) |
+   | `EXPECTED_CERT_SHA256` | SHA-256 of the release signing certificate (pins CI to the real key) |
 
 3. **Cut a release** — either:
    - push a tag: `git tag v1.0.1 && git push origin v1.0.1`, or
@@ -221,16 +222,25 @@ key; CI builds always use the real release keystore (below).
 
 4. **Versioning rules**
    - The git tag `vX.Y.Z` is the source of truth; CI passes
-     `--build-name=X.Y.Z --build-number=$GITHUB_RUN_NUMBER` to
+     `--build-name=X.Y.Z --build-number=$GITHUB_RUN_NUMBER+1000` to
      `flutter build apk`. `versionCode` therefore equals the CI run number
-     and always increases — it can never repeat or go down.
-   - `pubspec.yaml` carries a default (`1.1.0+1`) for local builds only.
+     **+ 1000** and always increases — it can never repeat or go down.
+     The offset protects against the workflow/repo being recreated: a reset
+     `run_number` would otherwise produce a lower `versionCode` and Android
+     would refuse the update as a downgrade. If you ever recreate the
+     workflow, keep the offset (and raise it only if `run_number + 1000`
+     could collide with an existing build).
+   - `pubspec.yaml` carries a default (`1.2.2+1`) for local builds only.
    - The version shown in **Settings → About** always matches the GitHub
      release tag.
    - **No `--split-per-abi`**: a single universal APK keeps one `versionCode`
      per release, one artifact, and an updater that cannot pick the wrong
      ABI slice. Size difference vs. an arm64-only APK (~10%) is the price
      for that simplicity.
+5. **Signing verification** — the release workflow extracts the APK signing
+   certificate SHA-256 with `apksigner` and fails the build unless it matches
+   the pinned `EXPECTED_CERT_SHA256` secret. If the release key is rotated,
+   update that secret with the new digest (the failure log prints it).
 
 ## Troubleshooting
 
@@ -262,10 +272,14 @@ key; CI builds always use the real release keystore (below).
   chat. Send it a message (private chats) or add it **as an admin**
   (channels/groups) before adding the recipient.
 - **Lots of 429 waits** — you are hitting Telegram's rate limits; increase
-  the pacing delay or send albums instead of individual photos.
+  the pacing delay or send albums instead of individual photos. Albums are
+  now weighed by their item count against Telegram's ~20 msgs/min per-chat
+  limit, so pacing adapts automatically.
 - **No update notification** — check Settings → Permissions → Notifications;
   also confirm you are not running the same or a newer version, and that the
-  version is not in "Skip this version" (Settings → Updates → Unskip).
+  version is not in "Skip this version" (Settings → Updates → Unskip). A
+  failed update check is reported as an error — it never pretends you are
+  "up to date".
 - **Background sending stops** — some systems kill long jobs; enable
   *Ignore battery optimisation* for this app (Settings → Permissions).
 

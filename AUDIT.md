@@ -279,3 +279,107 @@ verified token exists.
   path (Settings → Disconnect bot / Reconnect token).
 
 **Verdict: 7/7 PASS — cleared to push and tag `v1.2.1`.**
+
+---
+
+# v1.2.2 — Corrections and Pre-Push Audit (28-item bug-fix round)
+
+## Corrections to earlier claims (per item 28 of the bug-fix round)
+
+- **"photos >10 MB auto-compressed" (v1.1.0 audit, Audit 6):** this claim was
+  NOT true in code until this round — the real send path
+  (`core/background/send_task.dart`) built `SendingEngine` without `prepare:`,
+  so compression only ran in the in-app fallback. **Fixed in this round**
+  (item #3): the service isolate now passes `ImagePreparer.prepare`, which
+  also re-encodes HEIC/HEIF/BMP to JPEG. The claim is true as of v1.2.2.
+- **"`file_picker ^11`":** the v1.1.0 audit text documents a first CI
+  iteration that pinned `file_picker 11.0.3`; that iteration FAILED the
+  release build and was immediately replaced by `file_picker ^8.3.7`
+  (plus `flutter_plugin_android_lifecycle 2.0.20`). The audit text was
+  written as a log, not as the final state — the final state then and now is
+  `file_picker ^8.3.7`.
+- **"7/7 PASS":** the seven audits were genuinely run each round (analyze,
+  tests, security grep, CI config, docs, …), but the heading overstated
+  device coverage — nothing was ever run on a physical device because the
+  build machine has no Android SDK. Wording in this and future sections says
+  so explicitly.
+
+## Round summary (items 1–28)
+
+- #1 update checks: 304 now reuses the cached release; result type
+  available/upToDate/skipped/failed; manual checks skip If-None-Match; one
+  shared in-flight launch check. (Also fixed: `get<Map>` crashed on real
+  GitHub 304 empty bodies.)
+- #2 uploads: FormData rebuilt per retry (429/5xx retries now succeed);
+  albums weighed by item count in the rate limiter.
+- #3 compression wired into the service isolate + HEIC/HEIF/BMP re-encode +
+  PHOTO_INVALID_DIMENSIONS retried via sendDocument.
+- #4 service hardening: try/finally saves history + final snapshot + stops
+  service; catch-all album fallback; unauthorized aborts with a clear
+  message; interrupted sessions recovered on reattach.
+- #5 history refresh reloads prefs and listens for finished/canceled events;
+  fallback run no longer blocks `start()`.
+- #6 token errors: correct onboarding/reconnect text + Details expander;
+  401/404 only a token error for Telegram JSON; non-JSON → network error;
+  getMe/getChat fail fast.
+- #7 backups disabled (allowBackup=false + dataExtractionRules).
+- #8 startup inits guarded so runApp always runs.
+- #9 Pause ↔ Resume notification buttons.
+- #10 retry keeps caption/pacing/mode.
+- #11 emit throttling (500 ms engine, 3 s saveData) with phase/end forcing.
+- #12 resume always clears the pause flag; CancelToken aborts uploads and
+  429 waits.
+- #13 1-item chunks sent individually; 11 → 6 + 5 balancing.
+- #14 UpdateState clear-flags; sync skipped load; skipped UI card.
+- #15 checksum fail-closed; download cancel + cleanup; APK cleanup at startup.
+- #16 cold-start notification tap → /update; workmanager isolate initializes
+  notifications.
+- #17 permissions refresh on resume.
+- #19 client disposal fixed in editor sheet + connect; duplicate-recipient
+  message no longer says "Telegram rejected the request".
+- #20 notification body uses the first changelog bullet.
+- #21 temp files cleaned when the progress screen closes.
+- #22 file sizes cached across rebuilds.
+- #23 Messages/Estimated time follow the real send order.
+- #24 picker failures surface a snackbar.
+- #25 CI pins the signing certificate SHA-256 (`EXPECTED_CERT_SHA256` secret
+  set from the published v1.2.1 APK's signature; dead `KS` variable removed).
+- #26 versionCode = run_number + 1000 (downgrade protection), documented.
+
+## Audit 1 — Static analysis — PASS
+- `flutter analyze`: **0 issues**.
+
+## Audit 2 — Test suite — PASS
+- `flutter test`: **90/90** — new suites: update check (9), API client
+  retry/cancel/error mapping (8), retry config (4), engine hardening
+  (dimensions fallback, non-Telegram fallback, unauthorized, pause/resume
+  race, cancel during 429 wait, balanced chunks).
+
+## Audit 3 — Security & secrets — PASS
+- No GitHub PAT, bot token or keystore in tracked files. The new
+  `EXPECTED_CERT_SHA256` secret is a public certificate digest, not secret
+  material. Token redaction preserved in all new error paths
+  (`connect()` sanitizes before rethrow; Details text derives from the
+  sanitized exception).
+
+## Audit 4 — Android / CI config — PASS
+- Manifest: `allowBackup=false`, `fullBackupContent=false`,
+  `dataExtractionRules` (Android 12+) excluding all domains; normal updates
+  keep data. applicationId/minSdk/signing/AGP untouched.
+- release.yml: cert pin step fails closed (missing secret, missing cert,
+  mismatch); `--build-number` = run_number + 1000.
+
+## Audit 5 — Docs — PASS
+- README: versioning rules updated for the +1000 offset and cert pin;
+  pubspec default corrected; troubleshooting updated (album weighting,
+  failed update checks).
+- pubspec.yaml → `1.2.2+1` (the tag for this round is v1.2.2; the requested
+  "1.2.1+1" was already published as v1.2.1, so the truthful value is used).
+
+## Audit 6 — Device coverage — NOT RUN (no device available)
+- Compression inside the foreground-service isolate, notification button
+  swap, backup behavior on a real Android 12+ device, and the Android 15
+  dataSync timeout path are verified at code level only.
+
+**Verdict: audits 1–5 PASS, audit 6 not executable on this machine —
+cleared to push and tag `v1.2.2` with that caveat stated.**
