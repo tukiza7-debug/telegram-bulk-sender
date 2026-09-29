@@ -40,6 +40,12 @@ after the screens they show:
   `/revoke` in @BotFather (or the app reports "Invalid bot token"),
   **Settings → Reconnect token** lets you validate and replace it without
   losing recipients or history.
+- **Launch-time token re-validation** — the saved token is re-checked with
+  `getMe` every time the app starts. If the token has since been revoked or
+  regenerated in @BotFather, the app no longer pretends to be connected: the
+  dead token is cleared and a clear "token no longer valid" notice asks you
+  to reconnect. Offline launches keep the session and simply mark the
+  connection as unverified.
 - **Recipients** — save any number of chat IDs or `@channelusernames`,
   verified through `getChat` before they are saved. Add, rename, remove.
 - **File picking: photos, videos, documents** — photos via the Android
@@ -234,7 +240,14 @@ key; CI builds always use the real release keystore (below).
   try. If you regenerated the token with `/revoke` in @BotFather, the old
   one stops working: open **Settings → Reconnect token**, paste the new
   token, and it will be validated against `getMe` and swapped in —
-  recipients and history are kept.
+  recipients and history are kept. Since v1.2.0 the app also re-validates
+  the saved token on every launch: a revoked token is detected immediately,
+  the fake "connected" state is cleared, and you are asked to reconnect
+  instead of seeing sends fail with 401.
+- **"The saved bot token is no longer valid" on Home** — exactly the case
+  above: the token stored on this device was regenerated or revoked in
+  @BotFather. Tap **Connect bot** and paste the current token from
+  @BotFather; recipients and history are untouched.
 - **"App not installed"** — a different signing key than the installed
   build. Uninstall the old app first; then always update via the in-app
   updater (same key).

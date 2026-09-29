@@ -138,18 +138,97 @@ final targetsProvider =
 // Bot session
 // ---------------------------------------------------------------------------
 
-class BotSessionController extends Notifier<String?> {
-  @override
-  String? build() => null; // Loaded asynchronously via restore().
+/// Connection health of the bot link, as last checked against the real
+/// Telegram API (getMe).
+enum BotLinkStatus {
+  /// Restored from storage; verification is still in flight.
+  checking,
 
+  /// getMe succeeded in this session — the token is genuinely alive.
+  verified,
+
+  /// Could not be verified because of a network/server problem. The token
+  /// is kept (it may still be valid) but the UI knows it is unconfirmed.
+  offline,
+}
+
+/// The connected-bot session. `null` means no bot is connected.
+class BotSession {
+  const BotSession({required this.token, this.status = BotLinkStatus.checking});
+
+  final String token;
+  final BotLinkStatus status;
+}
+
+/// Injectable Telegram client factory so tests can stub the API.
+final telegramClientFactoryProvider =
+    Provider<TelegramApiClient Function(String token)>(
+  (ref) => (token) => TelegramApiClient(token),
+);
+
+/// One-shot notice: the previously saved token was found to be no longer
+/// valid on launch (regenerated/revoked in @BotFather) and has been cleared.
+/// The not-connected home state surfaces this so the user understands why
+/// the app asked them to connect again.
+final botResetNoticeProvider = StateProvider<bool>((ref) => false);
+
+class BotSessionController extends Notifier<BotSession?> {
+  @override
+  BotSession? build() => null; // Loaded asynchronously via restore().
+
+  /// Restores the saved token and RE-VERIFIES it against the live API.
+  ///
+  /// Previously the saved token was trusted blindly, so a bot whose token
+  /// had been regenerated or revoked in @BotFather still showed as
+  /// "connected" while every send failed with 401. Now the app only claims
+  /// a connection it can actually prove.
   Future<void> restore() async {
-    state = await ref.read(tokenStoreProvider).read();
+    final saved = await ref.read(tokenStoreProvider).read();
+    final token = (saved == null || saved.isEmpty) ? null : saved;
+    if (token == null) {
+      state = null;
+      return;
+    }
+    // Show the restored session immediately (no start-up flash), then
+    // verify it silently in the background.
+    state = BotSession(token: token);
+    unawaited(verifySaved());
   }
 
-  TelegramApiClient? client() {
-    final token = state;
-    if (token == null) return null;
-    return TelegramApiClient(token);
+  /// Re-validates the saved token with getMe.
+  ///
+  ///  - 401 (dead token): the session is wiped and a clear notice is set.
+  ///  - Network/server problems: the session is kept as [BotLinkStatus.offline].
+  Future<void> verifySaved() async {
+    final current = state;
+    if (current == null) return;
+    final api = ref.read(telegramClientFactoryProvider)(current.token);
+    try {
+      final bot = await api.getMe();
+      // The user may have reconnected with a different token while the
+      // check was in flight — never touch a newer session's data.
+      if (state?.token != current.token) return;
+      final prefs = ref.read(sharedPreferencesProvider);
+      await prefs.setString(AppConstants.botUsernameKey, bot.username);
+      state = BotSession(token: current.token, status: BotLinkStatus.verified);
+      ref.invalidate(botUsernameProvider);
+    } on TelegramApiException catch (e) {
+      if (e.kind == TelegramErrorKind.unauthorized) {
+        // The saved token is dead — stop pretending the bot is connected.
+        if (state?.token == current.token) {
+          await ref.read(tokenStoreProvider).delete();
+          final prefs = ref.read(sharedPreferencesProvider);
+          await prefs.remove(AppConstants.botUsernameKey);
+          state = null;
+          ref.invalidate(botUsernameProvider);
+          ref.read(botResetNoticeProvider.notifier).state = true;
+        }
+      } else if (state?.token == current.token) {
+        state = BotSession(token: current.token, status: BotLinkStatus.offline);
+      }
+    } finally {
+      api.dispose();
+    }
   }
 
   Future<BotUser> connect(String rawToken) async {
@@ -164,13 +243,15 @@ class BotSessionController extends Notifier<String?> {
         description: 'NOT_A_TOKEN',
       );
     }
-    final api = TelegramApiClient(token);
+    final api = ref.read(telegramClientFactoryProvider)(token);
     final bot = await api.getMe();
     await ref.read(tokenStoreProvider).write(token);
     final prefs = ref.read(sharedPreferencesProvider);
     await prefs.setString(AppConstants.botUsernameKey, bot.username);
-    state = token;
+    state = BotSession(token: token, status: BotLinkStatus.verified);
     api.dispose();
+    ref.invalidate(botUsernameProvider);
+    ref.read(botResetNoticeProvider.notifier).state = false;
     return bot;
   }
 
@@ -183,7 +264,9 @@ class BotSessionController extends Notifier<String?> {
 }
 
 final botSessionProvider =
-    NotifierProvider<BotSessionController, String?>(BotSessionController.new);
+    NotifierProvider<BotSessionController, BotSession?>(
+  BotSessionController.new,
+);
 
 final botUsernameProvider = FutureProvider<String>((ref) async {
   final prefs = ref.watch(sharedPreferencesProvider);
@@ -338,7 +421,7 @@ class SendController extends Notifier<SendUiState> {
     }
 
     // Fallback: run in the main isolate (app must stay open).
-    final token = ref.read(botSessionProvider);
+    final token = ref.read(botSessionProvider)?.token;
     if (token == null) {
       state = const SendUiState(
         fatalError: 'Bot is not connected. Reconnect and try again.',

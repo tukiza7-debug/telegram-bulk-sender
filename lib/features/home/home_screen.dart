@@ -22,7 +22,9 @@ class HomeScreen extends ConsumerWidget {
     final botUsername = ref.watch(botUsernameProvider);
     final update = ref.watch(updateProvider);
 
-    final hasToken = ref.watch(botSessionProvider) != null;
+    final session = ref.watch(botSessionProvider);
+    final hasToken = session != null;
+    final resetNotice = ref.watch(botResetNoticeProvider);
 
     return Scaffold(
       appBar: AppBar(
@@ -58,8 +60,9 @@ class HomeScreen extends ConsumerWidget {
               fileCount: files.length,
               botUsername: botUsername.value ?? '',
               update: update,
+              session: session,
             )
-          : const _NoBotState(),
+          : _NoBotState(resetNotice: resetNotice),
       bottomNavigationBar: hasToken ? _SendFooter(fileCount: files.length, targetCount: targets.length) : null,
     );
   }
@@ -71,12 +74,14 @@ class _HomeBody extends ConsumerWidget {
     required this.fileCount,
     required this.botUsername,
     required this.update,
+    required this.session,
   });
 
   final List<TgChat> targets;
   final int fileCount;
   final String botUsername;
   final UpdateState update;
+  final BotSession session;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -91,10 +96,7 @@ class _HomeBody extends ConsumerWidget {
           ),
         Section(
           title: 'Recipients',
-          subtitle: botUsername.isEmpty
-              ? null
-              : 'Sending as $botUsername. The bot must be a member (or admin) '
-                  'of each chat to post photos.',
+          subtitle: _connectionSubtitle(session, botUsername),
           trailing: IconButton(
             tooltip: 'Add recipient',
             onPressed: () => showTargetEditor(context),
@@ -158,6 +160,27 @@ class _HomeBody extends ConsumerWidget {
         ),
       ],
     );
+  }
+
+  /// Accurate connection line: the app only claims "Sending as @bot" once
+  /// the saved token has actually been re-verified with the live API.
+  String? _connectionSubtitle(BotSession session, String botUsername) {
+    switch (session.status) {
+      case BotLinkStatus.checking:
+        return 'Restoring bot connection…';
+      case BotLinkStatus.offline:
+        return botUsername.isEmpty
+            ? 'Connection could not be verified (offline). Sends will '
+                'retry once you are back online.'
+            : 'Sending as $botUsername (connection not verified — '
+                'check your internet). The bot must be a member (or admin) '
+                'of each chat to post photos.';
+      case BotLinkStatus.verified:
+        return botUsername.isEmpty
+            ? null
+            : 'Sending as $botUsername. The bot must be a member (or admin) '
+                'of each chat to post photos.';
+    }
   }
 }
 
@@ -382,18 +405,60 @@ class _SendFooter extends ConsumerWidget {
 }
 
 class _NoBotState extends StatelessWidget {
-  const _NoBotState();
+  const _NoBotState({required this.resetNotice});
+
+  final bool resetNotice;
 
   @override
   Widget build(BuildContext context) {
-    return EmptyState(
-      icon: Symbols.key_rounded,
-      title: 'Bot not connected',
-      message: 'Connect your Telegram bot to start sending photos, videos '
-          'and documents.',
-      action: FilledButton(
-        onPressed: () => context.push('/onboarding'),
-        child: const Text('Connect bot'),
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (resetNotice) ...[
+              Container(
+                padding: const EdgeInsets.all(16),
+                margin: const EdgeInsets.only(bottom: 16),
+                decoration: BoxDecoration(
+                  color: scheme.errorContainer,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Symbols.warning_rounded,
+                        size: 22, color: scheme.onErrorContainer),
+                    const SizedBox(width: 12),
+                    Flexible(
+                      child: Text(
+                        'The saved bot token is no longer valid — it was '
+                        'regenerated or revoked in @BotFather. Connect again '
+                        'with the current token.',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: scheme.onErrorContainer,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+            EmptyState(
+              icon: Symbols.key_rounded,
+              title: 'Bot not connected',
+              message: 'Connect your Telegram bot to start sending photos, '
+                  'videos and documents.',
+              action: FilledButton(
+                onPressed: () => context.push('/onboarding'),
+                child: const Text('Connect bot'),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

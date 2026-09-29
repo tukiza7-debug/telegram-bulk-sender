@@ -156,3 +156,75 @@ Final result: run [36624419840](https://github.com/tukiza7-debug/telegram-bulk-s
 — **all 17 steps green**, including `apksigner verify` of the signed APK.
 Release **v1.1.0** published with `telegram-bulk-sender-v1.1.0.apk`
 (56,695,928 bytes) + `checksums.txt`.
+
+---
+
+# v1.2.0 — Pre-Push Audit (7/7)
+
+**Scope of change:** launch-time re-validation of the saved bot token
+(`restore()` → silent `getMe`), automatic clearing of a dead (revoked /
+regenerated) token with a clear "token no longer valid" notice on Home,
+accurate connection status in the Recipients subtitle
+(checking / verified / offline), race-safety so a late check for an old
+token can never clobber a newer reconnect, and version bump 1.1.0 → 1.2.0.
+Pure Dart/UI change — no plugin, gradle, manifest or native code touched.
+
+## Audit 1 — Code & architecture review — PASS
+- Reviewed the full diff (`git diff`): `BotSession` state object with
+  `BotLinkStatus { checking, verified, offline }`; `restore()` shows the
+  restored session immediately (no start-up flash) and verifies in the
+  background; 401 ⇒ wipe token + username + set `botResetNoticeProvider`;
+  network/server errors keep the session as `offline` (never wiped offline).
+- Guard `state?.token != current.token` evaluated BEFORE any write — a late
+  getMe for an old token can neither wipe a newer session nor overwrite its
+  stored username (covered by two dedicated race tests).
+- `EmptyState` nesting inside the new scrollable notice container verified.
+
+## Audit 2 — Static analysis — PASS
+- `flutter analyze`: **0 issues** (release gate parity with CI).
+- `dart format` (new tall style) would reflow 35 legacy files; CI does not
+  enforce formatting, so the diff stays focused on the bug fix.
+
+## Audit 3 — Test suite — PASS
+- `flutter test`: **49/49 pass** (10 new `bot_session_test.dart` cases:
+  no-token restore, verified restore, revoked-token wipe + notice,
+  offline keep, 401-race no-clobber, late-success no-overwrite, connect
+  sanitizes + stores + clears notice, non-token rejected pre-network).
+
+## Audit 4 — Security & secrets — PASS
+- No PAT / credential anywhere in tracked files (`rg 'ghp_…'` clean).
+- No real-token-shaped strings in `lib/`; test fixtures are fake tokens.
+- No logging added on token paths; token never leaves the device except to
+  `api.telegram.org` (unchanged); dead token is actively deleted from
+  encrypted storage on 401.
+- Git remote credential lives only in local `.git/config` (never committed).
+
+## Audit 5 — Android / CI config & versioning — PASS
+- `pubspec.yaml` → `1.2.0+1`; CI overrides `--build-number` with
+  `github.run_number` ⇒ versionCode strictly increases (in-app updater
+  will offer v1.2.0 to every installed 1.0.x/1.1.0 device).
+- Tag-push trigger `v*` intact; Flutter pinned 3.47.5 (same as local);
+  signing secrets present (KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS,
+  KEY_PASSWORD verified via API); single universal APK + checksums + apksigner
+  verify steps unchanged.
+
+## Audit 6 — Feature completeness & UX — PASS
+- Photo/video/document sending untouched (`sendVideo`, `sendDocument`,
+  mixed `sendMediaGroup`, size caps, retry) — engine tests all green.
+- Settings → Reconnect token flow intact; recipients/history preserved on
+  reconnect and on dead-token reset.
+- No remaining code path treats the session as a bare `String?`.
+- Home now never claims "Sending as @bot" without a live `getMe` proof;
+  while checking it says "Restoring bot connection…"; offline keeps the
+  session but labels it unverified.
+
+## Audit 7 — Release readiness — PASS
+- Local release compile is impossible here (no Android SDK in the build
+  container); the authoritative build is CI with the identical pinned
+  toolchain. Risk accepted because the change set contains **no** native /
+  plugin / gradle deltas — the class of failure that needed CI in v1.1.0
+  does not apply.
+- README (features + troubleshooting) documents the new re-validation
+  behaviour and the new Home notice; AUDIT.md updated (this section).
+
+**Verdict: 7/7 PASS — cleared to push and tag `v1.2.0`.**

@@ -66,7 +66,7 @@ class _TargetEditorSheetState extends ConsumerState<_TargetEditorSheet> {
       _error = null;
       _verified = null;
     });
-    final token = ref.read(botSessionProvider);
+    final token = ref.read(botSessionProvider)?.token;
     if (token == null) {
       setState(() {
         _verifying = false;
@@ -111,7 +111,7 @@ class _TargetEditorSheetState extends ConsumerState<_TargetEditorSheet> {
   }
 
   TelegramApiClient _clientFor(TgChat chat) {
-    final token = ref.read(botSessionProvider)!;
+    final token = ref.read(botSessionProvider)!.token;
     return TelegramApiClient(token);
   }
 
