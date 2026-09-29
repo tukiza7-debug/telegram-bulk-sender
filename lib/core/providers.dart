@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/services.dart' show PlatformException;
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -698,6 +699,9 @@ class UpdateState {
 class UpdateController extends Notifier<UpdateState> {
   GithubReleaseService? _github;
 
+  /// Aborts an in-flight APK download when the user presses Cancel.
+  CancelToken? _downloadCancel;
+
   @override
   UpdateState build() {
     _github = GithubReleaseService();
@@ -707,6 +711,9 @@ class UpdateController extends Notifier<UpdateState> {
     // the meantime, so a stored "skip" briefly looked like "no skip".
     final skipped =
         ref.read(sharedPreferencesProvider).getString(AppConstants.skippedVersionKey);
+    // Remove stale APKs from previous download attempts.
+    Future<void>.microtask(
+        () => ref.read(apkDownloaderProvider).cleanupOldDownloads());
     return UpdateState(skippedVersion: skipped);
   }
 
@@ -760,6 +767,13 @@ class UpdateController extends Notifier<UpdateState> {
     // silent check must not wipe a banner the user can still act on.
   }
 
+  /// Cancels an in-flight download (user pressed Cancel in the UI).
+  void cancelDownload() {
+    if (state.phase == UpdatePhase.downloading) {
+      _downloadCancel?.cancel('User canceled the download');
+    }
+  }
+
   Future<void> download() async {
     final release = state.release;
     if (release == null) return;
@@ -771,6 +785,7 @@ class UpdateController extends Notifier<UpdateState> {
     }
 
     state = state.copyWith(phase: UpdatePhase.downloading, downloadProgress: 0);
+    String? path;
     try {
       final fileName = release.apkUrl.split('/').last;
       String? expectedHash;
@@ -780,7 +795,19 @@ class UpdateController extends Notifier<UpdateState> {
           fileName,
         );
       }
-      final path = await ref.read(apkDownloaderProvider).download(
+      if (expectedHash == null) {
+        // Fail closed: installing an update that cannot be verified would
+        // silently defeat the checksum protection.
+        state = state.copyWith(
+          phase: UpdatePhase.error,
+          error: 'The checksum for this update is unavailable, so it cannot '
+              'be verified. Try again later — the publisher may still be '
+              'uploading it.',
+        );
+        return;
+      }
+      _downloadCancel = CancelToken();
+      path = await ref.read(apkDownloaderProvider).download(
             release.apkUrl,
             fileName,
             onProgress: (received, total) {
@@ -788,25 +815,43 @@ class UpdateController extends Notifier<UpdateState> {
                 state = state.copyWith(downloadProgress: received / total);
               }
             },
+            cancelToken: _downloadCancel,
           );
       state = state.copyWith(phase: UpdatePhase.verifying);
-      if (expectedHash != null) {
-        await ref.read(apkDownloaderProvider).verify(path, expectedHash);
-      }
+      await ref.read(apkDownloaderProvider).verify(path, expectedHash);
       state = state.copyWith(
         phase: UpdatePhase.ready,
         downloadedPath: path,
       );
     } on Exception catch (e) {
-      state = state.copyWith(
-        phase: UpdatePhase.error,
-        error: 'Download failed: $e',
-      );
+      // Never keep a possibly corrupted APK around, and show cancel as a
+      // normal state rather than an error.
+      if (path != null) {
+        await ref.read(apkDownloaderProvider).deleteFile(path);
+      }
+      final canceled = e is DioException &&
+          (e.type == DioExceptionType.cancel ||
+              (state.phase == UpdatePhase.downloading &&
+                  (_downloadCancel?.isCancelled ?? false)));
+      state = canceled
+          ? state.copyWith(
+              phase: UpdatePhase.available,
+              downloadProgress: 0,
+            )
+          : state.copyWith(
+              phase: UpdatePhase.error,
+              error: 'Download failed: $e',
+            );
     } on StateError catch (e) {
+      if (path != null) {
+        await ref.read(apkDownloaderProvider).deleteFile(path);
+      }
       state = state.copyWith(
         phase: UpdatePhase.error,
         error: e.message,
       );
+    } finally {
+      _downloadCancel = null;
     }
   }
 

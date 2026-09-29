@@ -18,6 +18,36 @@ class ApkDownloadService {
     return dir;
   }
 
+  /// Deletes every stale download left in the updates/ cache directory.
+  /// Safe to call at startup — an in-flight download would always be
+  /// interrupted by the process restart anyway.
+  Future<void> cleanupOldDownloads() async {
+    try {
+      final dir = await _updateDir();
+      for (final entity in dir.existsSync()
+          ? dir.listSync()
+          : const <FileSystemEntity>[]) {
+        try {
+          entity.deleteSync(recursive: true);
+        } on FileSystemException {
+          // Best effort.
+        }
+      }
+    } on FileSystemException {
+      // Cache dir not available — nothing to clean.
+    }
+  }
+
+  /// Deletes a single downloaded file (e.g. after a failed checksum).
+  Future<void> deleteFile(String path) async {
+    try {
+      final file = File(path);
+      if (file.existsSync()) file.deleteSync();
+    } on FileSystemException {
+      // Best effort.
+    }
+  }
+
   /// Downloads [url] into the app cache and returns the local file path.
   Future<String> download(
     String url,

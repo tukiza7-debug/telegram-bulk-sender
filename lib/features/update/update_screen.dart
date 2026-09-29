@@ -288,6 +288,12 @@ class _AvailableCard extends ConsumerWidget {
                   textAlign: TextAlign.center,
                   style: theme.textTheme.bodySmall,
                 ),
+                const SizedBox(height: AppDimens.s8),
+                OutlinedButton.icon(
+                  onPressed: controller.cancelDownload,
+                  icon: const Icon(Symbols.close_rounded, size: 18),
+                  label: const Text('Cancel download'),
+                ),
               ],
             ),
           UpdatePhase.verifying => const Center(
