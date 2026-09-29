@@ -254,15 +254,19 @@ class _SendReviewScreenState extends ConsumerState<SendReviewScreen> {
                         _SummaryRow(
                           icon: Symbols.send_rounded,
                           label: 'Messages',
-                          value: _messageCountLabel(mediaCount, docCount,
-                              targets.length),
+                          value: _messageCountLabel(
+                            [for (final f in files) f.kind],
+                            targets.length,
+                          ),
                         ),
                         const SizedBox(height: AppDimens.s8),
                         _SummaryRow(
                           icon: Symbols.schedule_rounded,
                           label: 'Estimated time',
-                          value: _estimate(mediaCount, docCount,
-                              targets.length),
+                          value: _estimate(
+                            [for (final f in files) f.kind],
+                            targets.length,
+                          ),
                         ),
                       ],
                     ),
@@ -312,25 +316,54 @@ class _SendReviewScreenState extends ConsumerState<SendReviewScreen> {
     );
   }
 
-  String _messageCountLabel(int mediaCount, int docCount, int targetCount) {
-    if (_mode == SendMode.individual) {
-      final total = (mediaCount + docCount) * targetCount;
-      return '$total (one per file)';
+  /// Number of Telegram messages per recipient, computed in the REAL send
+  /// order: documents always break an open album chunk (they cannot join
+  /// media groups), and the final partial chunk counts as one more message.
+  /// This matches the engine's chunking (including 11 -> 6 + 5 balancing,
+  /// which changes sizes but not the message count).
+  int _messageCountPerTarget(List<SendKind> kinds, SendMode mode) {
+    if (mode == SendMode.individual) return kinds.length;
+    var messages = 0;
+    var openChunk = 0;
+    for (final kind in kinds) {
+      if (kind == SendKind.document) {
+        if (openChunk > 0) messages++; // flush the open album
+        openChunk = 0;
+        messages++; // the document itself
+      } else {
+        openChunk++;
+        if (openChunk == SendSessionConfig.albumMax) {
+          messages++;
+          openChunk = 0;
+        }
+      }
     }
-    final albums =
-        (mediaCount + SendSessionConfig.albumMax - 1) ~/ SendSessionConfig.albumMax;
-    return '${albums * targetCount + docCount * targetCount} '
-        '(albums of up to 10 + documents)';
+    if (openChunk > 0) messages++;
+    return messages;
   }
 
-  String _estimate(int mediaCount, int docCount, int targetCount) {
-    // Rough estimate: 3 s per API batch + configured pacing. Documents and
-    // videos upload slower; weight them ~2x a photo batch.
+  String _messageCountLabel(List<SendKind> kinds, int targetCount) {
+    final perTarget = _messageCountPerTarget(kinds, _mode);
+    final total = perTarget * targetCount;
+    return _mode == SendMode.individual
+        ? '$total (one per file)'
+        : '$total (albums of up to 10 + documents)';
+  }
+
+  String _estimate(List<SendKind> kinds, int targetCount) {
+    // Rough estimate: ~3 s per API message + configured pacing, documents
+    // and videos weighted ~2x a media item. Uses the real per-recipient
+    // message count so interleaved documents are counted correctly.
+    final mediaMessages = _mode == SendMode.individual
+        ? 0
+        : _messageCountPerTarget(kinds, SendMode.album);
+    final docCount = kinds.where((k) => k == SendKind.document).length;
+    final videoCount = kinds.where((k) => k == SendKind.video).length;
+    final photoCount = kinds.where((k) => k == SendKind.photo).length;
+
     final batches = _mode == SendMode.individual
-        ? mediaCount + docCount * 2
-        : ((mediaCount + SendSessionConfig.albumMax - 1) ~/
-                SendSessionConfig.albumMax) +
-            docCount * 2;
+        ? photoCount + videoCount * 2 + docCount * 2
+        : mediaMessages + docCount * 2 + videoCount;
     final perTarget = batches * (3 + _delaySeconds);
     final seconds = (perTarget * targetCount).round();
     if (seconds < 60) return 'about $seconds s';
