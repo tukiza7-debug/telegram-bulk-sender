@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:telegram_bulk_sender/core/network/telegram_api_client.dart';
+import 'package:telegram_bulk_sender/core/network/telegram_exceptions.dart';
 
 class FakeTelegramAdapter implements HttpClientAdapter {
   FakeTelegramAdapter(this.responses);
@@ -48,6 +49,26 @@ ResponseBody okBody() => ResponseBody.fromString(
       200,
       headers: {Headers.contentTypeHeader: ['application/json']},
     );
+
+class _ThrowingAdapter implements HttpClientAdapter {
+  _ThrowingAdapter(this.error);
+
+  final DioException error;
+  int calls = 0;
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    calls++;
+    throw error;
+  }
+
+  @override
+  void close({bool force = false}) {}
+}
 
 void main() {
   test('429 retry_after then 200 — the file is re-sent on the second attempt',
@@ -151,6 +172,134 @@ void main() {
     );
     // 1 initial + maxTransientRetries (4) attempts.
     expect(adapter.calls, 5);
+    client.dispose();
+  });
+
+  // Shared builder for the error-classification tests below.
+  TelegramApiClient clientFor(FakeTelegramAdapter adapter) {
+    return TelegramApiClient(
+      '1234:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsawk',
+      dio: Dio(BaseOptions(
+        baseUrl: 'https://api.telegram.org/',
+        validateStatus: (status) => status != null && status < 600,
+      ))
+        ..httpClientAdapter = adapter,
+      sleep: (_) async {},
+    );
+  }
+
+  test('JSON 401 from Telegram maps to a token error', () async {
+    final adapter = FakeTelegramAdapter([
+      ResponseBody.fromString(
+        jsonEncode({'ok': false, 'error_code': 401, 'description': 'Unauthorized'}),
+        401,
+        headers: {Headers.contentTypeHeader: ['application/json']},
+      ),
+    ]);
+    final client = clientFor(adapter);
+
+    await expectLater(
+      client.getMe(),
+      throwsA(
+        isA<TelegramApiException>()
+            .having((e) => e.kind, 'kind', TelegramErrorKind.unauthorized)
+            .having((e) => e.statusCode, 'statusCode', 401)
+            .having((e) => e.errorCode, 'errorCode', 401),
+      ),
+    );
+    client.dispose();
+  });
+
+  test('JSON 404 from Telegram maps to a token error (wrong token path)',
+      () async {
+    final adapter = FakeTelegramAdapter([
+      ResponseBody.fromString(
+        jsonEncode({'ok': false, 'error_code': 404, 'description': 'Not Found'}),
+        404,
+        headers: {Headers.contentTypeHeader: ['application/json']},
+      ),
+    ]);
+    final client = clientFor(adapter);
+
+    await expectLater(
+      client.getMe(),
+      throwsA(isA<TelegramApiException>()
+          .having((e) => e.kind, 'kind', TelegramErrorKind.unauthorized)),
+    );
+    client.dispose();
+  });
+
+  test('HTML 404 (captive portal / proxy) maps to a network error', () async {
+    final adapter = FakeTelegramAdapter([
+      ResponseBody.fromString(
+        '<html><body><h1>404 Not Found</h1></body></html>',
+        404,
+        headers: {Headers.contentTypeHeader: ['text/html']},
+      ),
+    ]);
+    final client = clientFor(adapter);
+
+    await expectLater(
+      client.getMe(),
+      throwsA(isA<TelegramApiException>()
+          .having((e) => e.kind, 'kind', TelegramErrorKind.network)),
+    );
+    client.dispose();
+  });
+
+  test('a timeout maps to a network error and getMe never retries', () async {
+    final adapter = _ThrowingAdapter(
+      DioException.connectionTimeout(
+        timeout: const Duration(milliseconds: 50),
+        requestOptions: RequestOptions(path: '/getMe'),
+      ),
+    );
+    final dio = Dio(BaseOptions(
+      baseUrl: 'https://api.telegram.org/',
+      validateStatus: (status) => status != null && status < 600,
+    ))..httpClientAdapter = adapter;
+    final client = TelegramApiClient(
+      '1234:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsawk',
+      dio: dio,
+      sleep: (_) async {},
+    );
+
+    await expectLater(
+      client.getMe(),
+      throwsA(isA<TelegramApiException>()
+          .having((e) => e.kind, 'kind', TelegramErrorKind.network)),
+    );
+    expect(adapter.calls, 1,
+        reason: 'connect-time checks must fail fast, not spin in backoff');
+    client.dispose();
+  });
+
+  test("a getChat failure with 0 transient retries doesn't spin either",
+      () async {
+    final adapter = FakeTelegramAdapter([
+      ResponseBody.fromString(
+        jsonEncode({'ok': false, 'error_code': 500, 'description': 'boom'}),
+        500,
+        headers: {Headers.contentTypeHeader: ['application/json']},
+      ),
+    ]);
+    final client = clientFor(adapter);
+
+    await expectLater(
+      client.getChat('@chat'),
+      throwsA(isA<TelegramApiException>()
+          .having((e) => e.kind, 'kind', TelegramErrorKind.serverError)),
+    );
+    expect(adapter.calls, 1);
+    client.dispose();
+  });
+
+  test('sanitize() redacts the token from network messages', () async {
+    const token = '1234:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsawk';
+    final client = TelegramApiClient(token);
+    final redacted = client.sanitize('/bot$token failed');
+    expect(redacted.contains(token), isFalse);
+    expect(redacted.contains('/bot***'), isTrue);
     client.dispose();
   });
 }

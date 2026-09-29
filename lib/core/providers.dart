@@ -276,7 +276,20 @@ class BotSessionController extends Notifier<BotSession?> {
       );
     }
     final api = ref.read(telegramClientFactoryProvider)(token);
-    final bot = await api.getMe();
+    BotUser bot;
+    try {
+      bot = await api.getMe();
+    } on TelegramApiException catch (e) {
+      // Re-throw with the token redacted so the screens' "Details" section
+      // can show the raw technical info safely.
+      throw TelegramApiException(
+        kind: e.kind,
+        statusCode: e.statusCode,
+        errorCode: e.errorCode,
+        description: api.sanitize(e.description),
+        retryAfter: e.retryAfter,
+      );
+    }
     await ref.read(tokenStoreProvider).write(token);
     final prefs = ref.read(sharedPreferencesProvider);
     await prefs.setString(AppConstants.botUsernameKey, bot.username);

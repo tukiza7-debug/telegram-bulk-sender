@@ -84,6 +84,7 @@ class TelegramApiClient {
     String method,
     Map<String, dynamic> query, {
     RetryWaitListener? onWait,
+    int transientRetries = maxTransientRetries,
   }) async {
     var attempt = 0;
     while (true) {
@@ -97,11 +98,17 @@ class TelegramApiClient {
         if (body['ok'] == true) return body;
         final status = response.statusCode ?? 500;
         final ex = TelegramApiException.fromResponse(status, body);
-        if (await _shouldRetry(ex, attempt, onWait)) continue;
+        if (await _shouldRetry(ex, attempt, onWait,
+            transientRetries: transientRetries)) {
+          continue;
+        }
         throw ex;
       } on DioException catch (e) {
         final ex = TelegramApiException.network(sanitize(e.message ?? 'Network error'));
-        if (await _shouldRetry(ex, attempt, onWait)) continue;
+        if (await _shouldRetry(ex, attempt, onWait,
+            transientRetries: transientRetries)) {
+          continue;
+        }
         throw ex;
       }
     }
@@ -114,15 +121,19 @@ class TelegramApiClient {
       try {
         return jsonDecode(data) as Map<String, dynamic>;
       } on FormatException {
+        // HTML or plain text usually means a captive portal, proxy or
+        // blocked network — NOT a Telegram answer. Report it as a network
+        // error so the user checks the connection instead of the token.
         throw TelegramApiException(
-          kind: TelegramErrorKind.serverError,
+          kind: TelegramErrorKind.network,
           statusCode: response.statusCode,
-          description: 'Malformed response from Telegram',
+          description: 'Non-JSON response (proxy, captive portal or blocked '
+              'network in front of Telegram)',
         );
       }
     }
     throw TelegramApiException(
-      kind: TelegramErrorKind.serverError,
+      kind: TelegramErrorKind.network,
       statusCode: response.statusCode,
       description: 'Unexpected response type from Telegram',
     );
@@ -131,15 +142,16 @@ class TelegramApiClient {
   Future<bool> _shouldRetry(
     TelegramApiException ex,
     int attempt,
-    RetryWaitListener? onWait,
-  ) async {
+    RetryWaitListener? onWait, {
+    int transientRetries = maxTransientRetries,
+  }) async {
     if (ex.isRateLimited && attempt <= maxRateLimitRetries) {
       final wait = (ex.retryAfter ?? 5) + 1;
       onWait?.call(wait, 'rate limit');
       await _sleep(Duration(seconds: wait));
       return true;
     }
-    if (ex.isTransient && attempt <= maxTransientRetries) {
+    if (ex.isTransient && attempt <= transientRetries) {
       final wait = min(30, 1 << attempt) + _jitter.nextInt(2);
       onWait?.call(wait, 'server error');
       await _sleep(Duration(seconds: wait));
@@ -151,14 +163,18 @@ class TelegramApiClient {
   // ---- Public API -----------------------------------------------------
 
   /// Validates the bot token. Throws [TelegramApiException] on failure.
+  ///
+  /// Zero transient retries: an offline connect must fail fast with "Can't
+  /// reach Telegram" instead of spinning through minutes of backoff.
   Future<BotUser> getMe() async {
-    final body = await _get('getMe', const {});
+    final body = await _get('getMe', const {}, transientRetries: 0);
     return BotUser.fromJson((body['result'] as Map<String, dynamic>));
   }
 
   /// Resolves a chat by numeric id (string) or @username.
+  /// Zero transient retries (same reasoning as [getMe]).
   Future<TgChat> getChat(String chatId) async {
-    final body = await _get('getChat', {'chat_id': chatId});
+    final body = await _get('getChat', {'chat_id': chatId}, transientRetries: 0);
     final chat = body['result'] as Map<String, dynamic>;
     return TgChat.fromChatJson(chat);
   }

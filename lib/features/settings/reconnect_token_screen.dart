@@ -25,6 +25,7 @@ class _ReconnectTokenScreenState extends ConsumerState<ReconnectTokenScreen> {
   bool _obscured = true;
   bool _validating = false;
   String? _error;
+  String? _errorDetails;
   String? _connectedAs;
 
   @override
@@ -37,12 +38,16 @@ class _ReconnectTokenScreenState extends ConsumerState<ReconnectTokenScreen> {
     if (_validating) return;
     final raw = _controller.text;
     if (raw.trim().isEmpty) {
-      setState(() => _error = 'Enter a bot token to continue.');
+      setState(() {
+        _error = 'Enter a bot token to continue.';
+        _errorDetails = null;
+      });
       return;
     }
     setState(() {
       _validating = true;
       _error = null;
+      _errorDetails = null;
     });
     try {
       final bot = await ref.read(botSessionProvider.notifier).connect(raw);
@@ -57,7 +62,10 @@ class _ReconnectTokenScreenState extends ConsumerState<ReconnectTokenScreen> {
       context.go('/');
     } on TelegramApiException catch (e) {
       if (!mounted) return;
-      setState(() => _error = e.friendlyMessage);
+      setState(() {
+        _error = e.friendlyMessageOnboarding;
+        _errorDetails = e.technicalDetails;
+      });
     } finally {
       if (mounted) setState(() => _validating = false);
     }
@@ -135,7 +143,7 @@ class _ReconnectTokenScreenState extends ConsumerState<ReconnectTokenScreen> {
                   ),
                   if (_error != null) ...[
                     const SizedBox(height: 8),
-                    _ErrorBox(message: _error!),
+                    _ErrorBox(message: _error!, details: _errorDetails),
                   ],
                   if (_connectedAs != null) ...[
                     const SizedBox(height: 8),
@@ -175,10 +183,18 @@ class _ReconnectTokenScreenState extends ConsumerState<ReconnectTokenScreen> {
   }
 }
 
-class _ErrorBox extends StatelessWidget {
-  const _ErrorBox({required this.message});
+class _ErrorBox extends StatefulWidget {
+  const _ErrorBox({required this.message, this.details});
 
   final String message;
+  final String? details;
+
+  @override
+  State<_ErrorBox> createState() => _ErrorBoxState();
+}
+
+class _ErrorBoxState extends State<_ErrorBox> {
+  bool _expanded = false;
 
   @override
   Widget build(BuildContext context) {
@@ -189,20 +205,63 @@ class _ErrorBox extends StatelessWidget {
         color: scheme.errorContainer,
         borderRadius: BorderRadius.circular(12),
       ),
-      child: Row(
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Symbols.error_rounded, size: 20, color: scheme.onErrorContainer),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              message,
-              style: Theme.of(context)
-                  .textTheme
-                  .bodySmall
-                  ?.copyWith(color: scheme.onErrorContainer),
-            ),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Symbols.error_rounded,
+                  size: 20, color: scheme.onErrorContainer),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  widget.message,
+                  style: Theme.of(context)
+                      .textTheme
+                      .bodySmall
+                      ?.copyWith(color: scheme.onErrorContainer),
+                ),
+              ),
+            ],
           ),
+          if (widget.details != null && widget.details!.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            InkWell(
+              onTap: () => setState(() => _expanded = !_expanded),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      _expanded
+                          ? Symbols.expand_less_rounded
+                          : Symbols.expand_more_rounded,
+                      size: 16,
+                      color: scheme.onErrorContainer,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      'Details',
+                      style: Theme.of(context)
+                          .textTheme
+                          .labelSmall
+                          ?.copyWith(color: scheme.onErrorContainer),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            if (_expanded)
+              Text(
+                widget.details!,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: scheme.onErrorContainer.withValues(alpha: 0.8),
+                    ),
+              ),
+          ],
         ],
       ),
     );

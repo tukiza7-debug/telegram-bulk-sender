@@ -40,14 +40,27 @@ void main() {
       expect(ex.friendlyMessage, contains('waits and retries'));
     });
 
-    test('maps 401 to invalid token', () {
+    test('maps 401 to a token error with send + onboarding messages', () {
       final ex = TelegramApiException.fromResponse(401, {
         'ok': false,
         'error_code': 401,
         'description': 'Unauthorized',
       });
       expect(ex.kind, TelegramErrorKind.unauthorized);
-      expect(ex.friendlyMessage, contains('Invalid bot token'));
+      // During a send the message points at reconnecting in Settings.
+      expect(ex.friendlyMessage, contains('Reconnect the bot in'));
+      // On onboarding the next step is copying a fresh token.
+      expect(ex.friendlyMessageOnboarding, contains('Telegram rejected this token'));
+      expect(ex.technicalDetails, contains('HTTP status: 401'));
+    });
+
+    test('404 with a non-Telegram body is a network error, not a token error',
+        () {
+      final ex = TelegramApiException.fromResponse(404, {
+        'message': 'Resource not found', // e.g. a proxy JSON error
+      });
+      expect(ex.kind, TelegramErrorKind.network);
+      expect(ex.friendlyMessage, contains("Can't reach Telegram"));
     });
   });
 

@@ -89,5 +89,26 @@ void main() {
       expect(masked.length, lessThan(25));
       expect(masked, isNot(contains('DqTcv')));
     });
+
+    test('[verify] tokens containing - and _ pass normalize unchanged',
+        () {
+      // Telegram's secret alphabet includes '-' and '_'; these must never be
+      // stripped or rewritten.
+      const token = '8943579073:AAFJbKu7gPQZz3Gm4Y-HYg9tUA5YLtpCZtk4_-x';
+      expect(BotTokenSanitizer.normalize(token), token);
+      expect(
+        BotTokenSanitizer.normalize('Token: `$token`'),
+        token,
+        reason: 'labels/backticks around a -/_ secret still extract cleanly',
+      );
+    });
+
+    test('[verify] a fullwidth colon is normalized to ASCII', () {
+      expect(
+        BotTokenSanitizer.normalize(
+            '123456789\uff1aAAHdqTcvCH1vGWJxfSeofSAs0K5PALDsawk'),
+        '123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsawk',
+      );
+    });
   });
 }
