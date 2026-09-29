@@ -1,5 +1,7 @@
 import 'dart:io';
 
+import 'package:dio/dio.dart';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:telegram_bulk_sender/core/network/telegram_api_client.dart'
     show RetryWaitListener;
@@ -51,6 +53,7 @@ class FakeGateway implements TelegramGateway {
     String path,
     String? caption, {
     RetryWaitListener? onWait,
+    CancelToken? cancelToken,
   }) async {
     if (unauthorized && !_unauthorizedNotified) {
       _unauthorizedNotified = true;
@@ -83,6 +86,7 @@ class FakeGateway implements TelegramGateway {
     String path,
     String? caption, {
     RetryWaitListener? onWait,
+    CancelToken? cancelToken,
   }) async {
     sentVideos.add(path);
   }
@@ -93,6 +97,7 @@ class FakeGateway implements TelegramGateway {
     String path,
     String? caption, {
     RetryWaitListener? onWait,
+    CancelToken? cancelToken,
   }) async {
     sentDocuments.add(path);
   }
@@ -103,6 +108,7 @@ class FakeGateway implements TelegramGateway {
     List<({String path, SendKind kind})> items,
     String? caption, {
     RetryWaitListener? onWait,
+    CancelToken? cancelToken,
   }) async {
     if (unauthorized) {
       throw TelegramApiException(
@@ -160,6 +166,7 @@ void main() {
         config: config(paths: paths, targetCount: 1),
         sleep: instantSleep,
         rateLimiter: RateLimiter(sleep: instantSleep),
+        emitThrottle: Duration.zero,
       );
 
       await engine.run();
@@ -181,6 +188,7 @@ void main() {
         config: config(paths: paths, targetCount: 2, mode: SendMode.individual),
         sleep: instantSleep,
         rateLimiter: RateLimiter(sleep: instantSleep),
+        emitThrottle: Duration.zero,
       );
 
       await engine.run();
@@ -198,6 +206,7 @@ void main() {
         config: config(paths: paths, targetCount: 1),
         sleep: instantSleep,
         rateLimiter: RateLimiter(sleep: instantSleep),
+        emitThrottle: Duration.zero,
       );
 
       await engine.run();
@@ -218,6 +227,7 @@ void main() {
         config: config(paths: paths, targetCount: 1),
         sleep: instantSleep,
         rateLimiter: RateLimiter(sleep: instantSleep),
+        emitThrottle: Duration.zero,
         onSnapshot: (snapshot) {
           for (final hook in hooks) {
             hook(snapshot);
@@ -245,6 +255,7 @@ void main() {
         config: config(paths: paths, targetCount: 1, mode: SendMode.individual),
         sleep: instantSleep,
         rateLimiter: RateLimiter(sleep: instantSleep),
+        emitThrottle: Duration.zero,
         onSnapshot: (snapshot) {
           if (snapshot.waitingMessage != null) {
             waitingMessages.add(snapshot.waitingMessage!);
@@ -271,6 +282,7 @@ void main() {
         config: config(paths: paths, targetCount: 1, mode: SendMode.individual),
         sleep: instantSleep,
         rateLimiter: RateLimiter(sleep: instantSleep),
+        emitThrottle: Duration.zero,
         onSnapshot: (snapshot) {
           for (final hook in hooks) {
             hook(snapshot);
@@ -311,6 +323,7 @@ void main() {
         ),
         sleep: instantSleep,
         rateLimiter: RateLimiter(sleep: instantSleep),
+        emitThrottle: Duration.zero,
       );
 
       await engine.run();
@@ -332,6 +345,7 @@ void main() {
         ),
         sleep: instantSleep,
         rateLimiter: RateLimiter(sleep: instantSleep),
+        emitThrottle: Duration.zero,
       );
 
       await engine.run();
@@ -354,6 +368,7 @@ void main() {
         ),
         sleep: instantSleep,
         rateLimiter: RateLimiter(sleep: instantSleep),
+        emitThrottle: Duration.zero,
       );
 
       await engine.run();
@@ -381,6 +396,7 @@ void main() {
         ),
         sleep: instantSleep,
         rateLimiter: RateLimiter(sleep: instantSleep),
+        emitThrottle: Duration.zero,
       );
 
       await engine.run();
@@ -405,6 +421,7 @@ void main() {
         config: config(paths: paths, targetCount: 1),
         sleep: instantSleep,
         rateLimiter: RateLimiter(sleep: instantSleep),
+        emitThrottle: Duration.zero,
       );
 
       final result = await engine.run();
@@ -414,6 +431,70 @@ void main() {
       expect(gateway.sentPhotos, paths,
           reason: 'the chunk must be retried file by file');
       expect(result.successCount, 3);
+    });
+
+    test('a quick pause -> resume race does not pause the run by itself',
+        () async {
+      final gateway = FakeGateway();
+      final paths = [
+        for (var i = 0; i < 6; i++) '/tmp/r$i.jpg',
+      ];
+      final engine = SendingEngine(
+        gateway: gateway,
+        config: config(
+          paths: paths,
+          targetCount: 1,
+          mode: SendMode.individual,
+        ),
+        sleep: instantSleep,
+        rateLimiter: RateLimiter(sleep: instantSleep),
+        emitThrottle: Duration.zero,
+      );
+
+      // Both requests land BEFORE the run even reaches _drainPause.
+      engine.pause();
+      engine.resume();
+
+      final result = await engine.run();
+
+      expect(result.phase, SendPhase.finished);
+      expect(result.successCount, 6);
+      expect(
+        result.items.every((i) => i.status == SendItemStatus.success),
+        isTrue,
+      );
+    });
+
+    test('cancelling during a 429 wait aborts and marks the item canceled',
+        () async {
+      final gateway = FakeGateway(rateLimitTimes: 1);
+      final paths = ['/tmp/w1.jpg', '/tmp/w2.jpg'];
+      var canceledFromSnapshot = false;
+      SendingEngine? engineRef;
+      final engine = SendingEngine(
+        gateway: gateway,
+        config: config(
+          paths: paths,
+          targetCount: 1,
+          mode: SendMode.individual,
+        ),
+        onSnapshot: (snapshot) {
+          if (snapshot.waitingMessage != null && !canceledFromSnapshot) {
+            canceledFromSnapshot = true;
+            engineRef?.cancel(); // user presses Cancel while we wait out a 429
+          }
+        },
+        sleep: instantSleep,
+        rateLimiter: RateLimiter(sleep: instantSleep),
+        emitThrottle: Duration.zero,
+      );
+      engineRef = engine;
+
+      final result = await engine.run();
+
+      expect(result.phase, SendPhase.canceled);
+      expect(result.successCount + result.canceledCount, result.total);
+      expect(canceledFromSnapshot, isTrue);
     });
 
     test('unauthorized stops the run and fails the remaining items',
@@ -427,6 +508,7 @@ void main() {
         config: config(paths: paths, targetCount: 2),
         sleep: instantSleep,
         rateLimiter: RateLimiter(sleep: instantSleep),
+        emitThrottle: Duration.zero,
       );
 
       final result = await engine.run();

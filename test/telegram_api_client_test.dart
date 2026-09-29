@@ -274,6 +274,48 @@ void main() {
     client.dispose();
   });
 
+  test('cancelling during a 429 wait aborts without a second request',
+      () async {
+    final file = await makeTempFile('big.jpg');
+    addTearDown(() => file.parent.delete(recursive: true).ignore());
+
+    final adapter = FakeTelegramAdapter([
+      ResponseBody.fromString(
+        jsonEncode({
+          'ok': false,
+          'error_code': 429,
+          'description': 'Too Many Requests: retry after 30',
+          'parameters': {'retry_after': 30},
+        }),
+        429,
+        headers: {Headers.contentTypeHeader: ['application/json']},
+      ),
+      okBody(), // must never be reached
+    ]);
+    final cancelToken = CancelToken();
+    final client = TelegramApiClient(
+      '1234:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsawk',
+      dio: Dio(BaseOptions(
+        baseUrl: 'https://api.telegram.org/',
+        validateStatus: (status) => status != null && status < 600,
+      ))
+        ..httpClientAdapter = adapter,
+      // Simulate the user pressing Cancel while the client idles in the
+      // 429 backoff: the first wait tick cancels the token.
+      sleep: (_) async => cancelToken.cancel('User canceled'),
+    );
+
+    await expectLater(
+      client.sendPhoto('@chat', file.path, null, cancelToken: cancelToken),
+      throwsA(isA<TelegramApiException>()
+          .having((e) => e.kind, 'kind', TelegramErrorKind.network)
+          .having((e) => e.description, 'description', contains('canceled'))),
+    );
+    expect(adapter.calls, 1,
+        reason: 'a cancelled wait must not produce another request');
+    client.dispose();
+  });
+
   test("a getChat failure with 0 transient retries doesn't spin either",
       () async {
     final adapter = FakeTelegramAdapter([

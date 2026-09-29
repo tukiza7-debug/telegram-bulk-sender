@@ -57,18 +57,7 @@ class SendTaskHandler extends TaskHandler {
         // here exactly as in the main isolate.
         prepare: (path) => ImagePreparer.prepare(path),
         onSnapshot: (snapshot) async {
-          await FlutterForegroundTask.saveData(
-            key: AppConstants.fgsSnapshotKey,
-            value: snapshot.encode(),
-          );
-          FlutterForegroundTask.sendDataToMain(snapshot.encode());
-          final done = snapshot.successCount;
-          final failed = snapshot.failedCount;
-          await FlutterForegroundTask.updateService(
-            notificationText: snapshot.waitingMessage ??
-                '$done sent${failed > 0 ? ', $failed failed' : ''} '
-                    'of ${snapshot.total}',
-          );
+          await _onSnapshot(snapshot);
         },
       );
       _engine = engine;
@@ -143,6 +132,53 @@ class SendTaskHandler extends TaskHandler {
       value: finalSnapshot.encode(),
     );
     FlutterForegroundTask.sendDataToMain(finalSnapshot.encode());
+  }
+
+  /// Throttled progress handling: snapshots arrive often (every item), but
+  /// the on-disk snapshot (saveData) is a JSON blob of the whole session and
+  /// Android notification updates are not free either — persist at most
+  /// every 3 s, always at the end / on phase change. Every event is still
+  /// forwarded to the UI, so live progress stays smooth.
+  DateTime _lastSaveAt = DateTime.fromMillisecondsSinceEpoch(0);
+  SendPhase _lastNotifiedPhase = SendPhase.idle;
+  bool _lastNotifPaused = false;
+
+  Future<void> _onSnapshot(SendProgressSnapshot snapshot) async {
+    final now = DateTime.now();
+    final finalPhase = snapshot.phase != SendPhase.running &&
+        snapshot.phase != SendPhase.paused;
+    final phaseChanged = snapshot.phase != _lastNotifiedPhase;
+
+    if (finalPhase || phaseChanged || now.difference(_lastSaveAt).inMilliseconds >= 3000) {
+      await FlutterForegroundTask.saveData(
+        key: AppConstants.fgsSnapshotKey,
+        value: snapshot.encode(),
+      );
+      _lastSaveAt = now;
+      _lastNotifiedPhase = snapshot.phase;
+    }
+    FlutterForegroundTask.sendDataToMain(snapshot.encode());
+
+    // Swap Pause <-> Resume so the notification always offers the action
+    // that is currently possible.
+    final paused = snapshot.phase == SendPhase.paused;
+    final done = snapshot.successCount;
+    final failed = snapshot.failedCount;
+    final buttonsChanged = paused != _lastNotifPaused || phaseChanged;
+    await FlutterForegroundTask.updateService(
+      notificationText: snapshot.waitingMessage ??
+          '$done sent${failed > 0 ? ', $failed failed' : ''} '
+              'of ${snapshot.total}',
+      notificationButtons: buttonsChanged
+          ? [
+              NotificationButton(
+                  id: paused ? 'resume' : 'pause',
+                  text: paused ? 'Resume' : 'Pause'),
+              const NotificationButton(id: 'cancel', text: 'Cancel'),
+            ]
+          : null,
+    );
+    _lastNotifPaused = paused;
   }
 
   Future<void> _stop() async {

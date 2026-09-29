@@ -53,6 +53,7 @@ class TelegramApiClient {
     Future<FormData> Function() buildData, {
     Map<String, dynamic>? query,
     RetryWaitListener? onWait,
+    CancelToken? cancelToken,
   }) async {
     var attempt = 0;
     while (true) {
@@ -65,16 +66,31 @@ class TelegramApiClient {
           method,
           data: await buildData(),
           queryParameters: query,
+          cancelToken: cancelToken,
         );
         final body = _decode(response);
         if (body['ok'] == true) return body;
         final status = response.statusCode ?? 500;
         final ex = TelegramApiException.fromResponse(status, body);
-        if (await _shouldRetry(ex, attempt, onWait)) continue;
+        if (await _shouldRetry(ex, attempt, onWait,
+            cancelToken: cancelToken)) {
+          continue;
+        }
         throw ex;
+      } on TelegramApiException {
+        rethrow; // e.g. 'Send canceled' from the interruptible wait
       } on DioException catch (e) {
+        if (cancelToken?.isCancelled ?? false) {
+          throw TelegramApiException(
+            kind: TelegramErrorKind.network,
+            description: 'Send canceled',
+          );
+        }
         final ex = TelegramApiException.network(sanitize(e.message ?? 'Network error'));
-        if (await _shouldRetry(ex, attempt, onWait)) continue;
+        if (await _shouldRetry(ex, attempt, onWait,
+            cancelToken: cancelToken)) {
+          continue;
+        }
         throw ex;
       }
     }
@@ -139,22 +155,49 @@ class TelegramApiClient {
     );
   }
 
+  /// Interruptible wait used before retries. A cancelled [cancelToken]
+  /// aborts the sleep immediately instead of idling through the full
+  /// backoff (e.g. the user pressed Cancel during a 429 wait).
+  Future<void> _interruptibleSleep(
+    Duration total,
+    CancelToken? cancelToken,
+  ) async {
+    if (cancelToken == null) {
+      await _sleep(total);
+      return;
+    }
+    var remaining = total;
+    const tick = Duration(milliseconds: 100);
+    while (remaining > Duration.zero) {
+      if (cancelToken.isCancelled) {
+        throw TelegramApiException(
+          kind: TelegramErrorKind.network,
+          description: 'Send canceled',
+        );
+      }
+      final step = remaining < tick ? remaining : tick;
+      await _sleep(step);
+      remaining -= step;
+    }
+  }
+
   Future<bool> _shouldRetry(
     TelegramApiException ex,
     int attempt,
     RetryWaitListener? onWait, {
     int transientRetries = maxTransientRetries,
+    CancelToken? cancelToken,
   }) async {
     if (ex.isRateLimited && attempt <= maxRateLimitRetries) {
       final wait = (ex.retryAfter ?? 5) + 1;
       onWait?.call(wait, 'rate limit');
-      await _sleep(Duration(seconds: wait));
+      await _interruptibleSleep(Duration(seconds: wait), cancelToken);
       return true;
     }
     if (ex.isTransient && attempt <= transientRetries) {
       final wait = min(30, 1 << attempt) + _jitter.nextInt(2);
       onWait?.call(wait, 'server error');
-      await _sleep(Duration(seconds: wait));
+      await _interruptibleSleep(Duration(seconds: wait), cancelToken);
       return true;
     }
     return false;
@@ -185,6 +228,7 @@ class TelegramApiClient {
     String filePath,
     String? caption, {
     RetryWaitListener? onWait,
+    CancelToken? cancelToken,
   }) async {
     Future<FormData> build() async => FormData.fromMap(<String, dynamic>{
           'chat_id': chatId,
@@ -194,7 +238,8 @@ class TelegramApiClient {
             filename: filePath.split('/').last,
           ),
         });
-    final body = await _post('sendPhoto', build, onWait: onWait);
+    final body = await _post('sendPhoto', build,
+        onWait: onWait, cancelToken: cancelToken);
     return ((body['result'] as Map<String, dynamic>)['message_id'] as int?) ?? 0;
   }
 
@@ -204,6 +249,7 @@ class TelegramApiClient {
     String filePath,
     String? caption, {
     RetryWaitListener? onWait,
+    CancelToken? cancelToken,
   }) async {
     Future<FormData> build() async => FormData.fromMap(<String, dynamic>{
           'chat_id': chatId,
@@ -214,7 +260,8 @@ class TelegramApiClient {
             filename: filePath.split('/').last,
           ),
         });
-    final body = await _post('sendVideo', build, onWait: onWait);
+    final body = await _post('sendVideo', build,
+        onWait: onWait, cancelToken: cancelToken);
     return ((body['result'] as Map<String, dynamic>)['message_id'] as int?) ?? 0;
   }
 
@@ -225,6 +272,7 @@ class TelegramApiClient {
     String filePath,
     String? caption, {
     RetryWaitListener? onWait,
+    CancelToken? cancelToken,
   }) async {
     Future<FormData> build() async => FormData.fromMap(<String, dynamic>{
           'chat_id': chatId,
@@ -234,7 +282,8 @@ class TelegramApiClient {
             filename: filePath.split('/').last,
           ),
         });
-    final body = await _post('sendDocument', build, onWait: onWait);
+    final body = await _post('sendDocument', build,
+        onWait: onWait, cancelToken: cancelToken);
     return ((body['result'] as Map<String, dynamic>)['message_id'] as int?) ?? 0;
   }
 
@@ -246,6 +295,7 @@ class TelegramApiClient {
     List<({String path, SendKind kind})> items,
     String? caption, {
     RetryWaitListener? onWait,
+    CancelToken? cancelToken,
   }) async {
     assert(items.isNotEmpty && items.length <= SendSessionConfig.albumMax);
     Future<FormData> build() async {
@@ -271,7 +321,8 @@ class TelegramApiClient {
       return FormData.fromMap(map);
     }
 
-    final body = await _post('sendMediaGroup', build, onWait: onWait);
+    final body = await _post('sendMediaGroup', build,
+        onWait: onWait, cancelToken: cancelToken);
     final result = body['result'] as List<dynamic>;
     return [
       for (final item in result)

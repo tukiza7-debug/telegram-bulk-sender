@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -67,6 +68,7 @@ class _FakeApi implements TelegramApiClient {
     String filePath,
     String? caption, {
     RetryWaitListener? onWait,
+    CancelToken? cancelToken,
   }) =>
       throw UnimplementedError();
 
@@ -76,6 +78,7 @@ class _FakeApi implements TelegramApiClient {
     String filePath,
     String? caption, {
     RetryWaitListener? onWait,
+    CancelToken? cancelToken,
   }) =>
       throw UnimplementedError();
 
@@ -85,6 +88,7 @@ class _FakeApi implements TelegramApiClient {
     String filePath,
     String? caption, {
     RetryWaitListener? onWait,
+    CancelToken? cancelToken,
   }) =>
       throw UnimplementedError();
 
@@ -94,6 +98,7 @@ class _FakeApi implements TelegramApiClient {
     List<({String path, SendKind kind})> items,
     String? caption, {
     RetryWaitListener? onWait,
+    CancelToken? cancelToken,
   }) =>
       throw UnimplementedError();
 

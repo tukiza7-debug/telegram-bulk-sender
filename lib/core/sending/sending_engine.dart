@@ -1,5 +1,7 @@
 import 'dart:io';
 
+import 'package:dio/dio.dart';
+
 import '../network/telegram_api_client.dart';
 import '../network/telegram_exceptions.dart';
 import 'models.dart';
@@ -12,6 +14,7 @@ abstract class TelegramGateway {
     String path,
     String? caption, {
     RetryWaitListener? onWait,
+    CancelToken? cancelToken,
   });
 
   Future<void> sendVideo(
@@ -19,6 +22,7 @@ abstract class TelegramGateway {
     String path,
     String? caption, {
     RetryWaitListener? onWait,
+    CancelToken? cancelToken,
   });
 
   Future<void> sendDocument(
@@ -26,6 +30,7 @@ abstract class TelegramGateway {
     String path,
     String? caption, {
     RetryWaitListener? onWait,
+    CancelToken? cancelToken,
   });
 
   Future<void> sendMediaGroup(
@@ -33,6 +38,7 @@ abstract class TelegramGateway {
     List<({String path, SendKind kind})> items,
     String? caption, {
     RetryWaitListener? onWait,
+    CancelToken? cancelToken,
   });
 }
 
@@ -47,8 +53,10 @@ class TelegramGatewayImpl implements TelegramGateway {
     String path,
     String? caption, {
     RetryWaitListener? onWait,
+    CancelToken? cancelToken,
   }) async {
-    await _api.sendPhoto(chatId, path, caption, onWait: onWait);
+    await _api.sendPhoto(chatId, path, caption,
+        onWait: onWait, cancelToken: cancelToken);
   }
 
   @override
@@ -57,8 +65,10 @@ class TelegramGatewayImpl implements TelegramGateway {
     String path,
     String? caption, {
     RetryWaitListener? onWait,
+    CancelToken? cancelToken,
   }) async {
-    await _api.sendVideo(chatId, path, caption, onWait: onWait);
+    await _api.sendVideo(chatId, path, caption,
+        onWait: onWait, cancelToken: cancelToken);
   }
 
   @override
@@ -67,8 +77,10 @@ class TelegramGatewayImpl implements TelegramGateway {
     String path,
     String? caption, {
     RetryWaitListener? onWait,
+    CancelToken? cancelToken,
   }) async {
-    await _api.sendDocument(chatId, path, caption, onWait: onWait);
+    await _api.sendDocument(chatId, path, caption,
+        onWait: onWait, cancelToken: cancelToken);
   }
 
   @override
@@ -77,8 +89,10 @@ class TelegramGatewayImpl implements TelegramGateway {
     List<({String path, SendKind kind})> items,
     String? caption, {
     RetryWaitListener? onWait,
+    CancelToken? cancelToken,
   }) async {
-    await _api.sendMediaGroup(chatId, items, caption, onWait: onWait);
+    await _api.sendMediaGroup(chatId, items, caption,
+        onWait: onWait, cancelToken: cancelToken);
   }
 }
 
@@ -101,9 +115,11 @@ class SendingEngine {
     this.prepare,
     Future<void> Function(Duration delay)? sleep,
     RateLimiter? rateLimiter,
+    Duration emitThrottle = const Duration(milliseconds: 500),
   })  : _gateway = gateway,
         _sleep = sleep ?? ((d) => Future<void>.delayed(d)),
-        _limiter = rateLimiter ?? RateLimiter();
+        _limiter = rateLimiter ?? RateLimiter(),
+        _emitInterval = emitThrottle;
 
   final TelegramGateway _gateway;
   final SendSessionConfig config;
@@ -112,6 +128,10 @@ class SendingEngine {
 
   final RateLimiter _limiter;
   final Future<void> Function(Duration delay) _sleep;
+
+  /// Cancelled as soon as [cancel] is requested, so in-flight Dio uploads
+  /// and 429 backoff waits abort instead of running to completion.
+  final CancelToken _cancelToken = CancelToken();
 
   bool _pauseRequested = false;
   bool _cancelRequested = false;
@@ -125,6 +145,13 @@ class SendingEngine {
   SendProgressSnapshot _snapshot =
       const SendProgressSnapshot(items: [], phase: SendPhase.idle);
 
+  // Throttling: per-item emissions clone the whole item list and JSON-encode
+  // it on every emit — O(n) work per item, O(n²) per session. Emit at most
+  // once per [_emitInterval] unless the phase/waiting message changed; the
+  // final snapshot is always forced through.
+  final Duration _emitInterval;
+  DateTime _lastEmitAt = DateTime.fromMillisecondsSinceEpoch(0);
+
   /// Latest snapshot (also valid after the run completes).
   SendProgressSnapshot get snapshot => _snapshot;
 
@@ -133,13 +160,20 @@ class SendingEngine {
   }
 
   void resume() {
+    // Always clear the flag: a quick pause -> resume while the run is still
+    // processing (not yet in _drainPause) must not pause the run by itself
+    // a moment later.
+    _pauseRequested = false;
     if (_snapshot.phase == SendPhase.paused) {
-      _pauseRequested = false;
       _emit(_current(SendPhase.running, clearWaiting: true));
     }
   }
 
-  void cancel() => _cancelRequested = true;
+  void cancel() {
+    _cancelRequested = true;
+    // Abort in-flight uploads and interruptible retry waits.
+    if (!_cancelToken.isCancelled) _cancelToken.cancel('User canceled');
+  }
 
   /// Runs the whole session. Call exactly once per engine instance.
   Future<SendProgressSnapshot> run() async {
@@ -197,7 +231,7 @@ class SendingEngine {
     _snapshot = _current(
       _cancelRequested ? SendPhase.canceled : SendPhase.finished,
     );
-    _emit(_snapshot);
+    _emit(_snapshot, force: true);
     return _snapshot;
   }
 
@@ -298,6 +332,7 @@ class SendingEngine {
         config.caption,
         onWait: (seconds, reason) =>
             _emitWaiting('Rate limited — resuming in ${seconds}s'),
+        cancelToken: _cancelToken,
       );
       for (final item in chunk) {
         item
@@ -377,19 +412,29 @@ class SendingEngine {
       }
       switch (item.kind) {
         case SendKind.photo:
-          await _gateway.sendPhoto(
-            item.targetChatId, item.path, config.caption, onWait: onWait);
+          await _gateway.sendPhoto(item.targetChatId, item.path, config.caption,
+              onWait: onWait, cancelToken: _cancelToken);
         case SendKind.video:
-          await _gateway.sendVideo(
-            item.targetChatId, item.path, config.caption, onWait: onWait);
+          await _gateway.sendVideo(item.targetChatId, item.path, config.caption,
+              onWait: onWait, cancelToken: _cancelToken);
         case SendKind.document:
-          await _gateway.sendDocument(
-            item.targetChatId, item.path, config.caption, onWait: onWait);
+          await _gateway.sendDocument(item.targetChatId, item.path,
+              config.caption,
+              onWait: onWait, cancelToken: _cancelToken);
       }
       item
         ..status = SendItemStatus.success
         ..error = null;
     } on TelegramApiException catch (e) {
+      // A user cancel aborts the in-flight upload — that item is canceled,
+      // not failed.
+      if (_cancelRequested && e.description.contains('Send canceled')) {
+        item
+          ..status = SendItemStatus.canceled
+          ..error = null;
+        _emit(_current(_snapshot.phase));
+        return;
+      }
       if (e.kind == TelegramErrorKind.unauthorized) {
         _fatalError ??= e.friendlyMessage;
         _cancelRequested = true;
@@ -398,11 +443,13 @@ class SendingEngine {
       // aspect ratios it cannot process) still make valid documents —
       // retry that exact file via sendDocument before giving up.
       if (item.kind == SendKind.photo &&
+          !_cancelRequested &&
           e.kind != TelegramErrorKind.unauthorized &&
           e.description.contains('PHOTO_INVALID_DIMENSIONS')) {
         try {
-          await _gateway.sendDocument(
-            item.targetChatId, item.path, config.caption, onWait: null);
+          await _gateway.sendDocument(item.targetChatId, item.path,
+              config.caption,
+              onWait: null, cancelToken: _cancelToken);
           item
             ..status = SendItemStatus.success
             ..error = null;
@@ -484,7 +531,18 @@ class SendingEngine {
     );
   }
 
-  void _emit(SendProgressSnapshot snapshot) {
+  void _emit(SendProgressSnapshot snapshot, {bool force = false}) {
+    final phaseOrWaitingChanged = snapshot.phase != _snapshot.phase ||
+        snapshot.waitingMessage != _snapshot.waitingMessage;
+    if (!force && !phaseOrWaitingChanged) {
+      final now = DateTime.now();
+      if (now.difference(_lastEmitAt) < _emitInterval) {
+        return; // dropped — the next emit carries the accumulated statuses
+      }
+      _lastEmitAt = now;
+    } else {
+      _lastEmitAt = DateTime.now();
+    }
     _snapshot = snapshot;
     onSnapshot?.call(snapshot);
   }
