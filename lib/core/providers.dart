@@ -410,6 +410,10 @@ class SendController extends Notifier<SendUiState> {
   SendingEngine? _localEngine;
   StreamSubscription<SendProgressSnapshot>? _sub;
 
+  /// The config of the last started session, so "Retry failed" can reuse
+  /// the original caption, pacing and mode.
+  SendSessionConfig? _lastConfig;
+
   @override
   SendUiState build() {
     ref.onDispose(() => _sub?.cancel());
@@ -459,6 +463,7 @@ class SendController extends Notifier<SendUiState> {
   Future<void> start(SendSessionConfig config) async {
     if (state.running) return;
     state = const SendUiState(starting: true);
+    _lastConfig = config;
 
     _sub?.cancel();
     _sub = SendEventBus.instance.stream.listen((snapshot) {
@@ -581,41 +586,55 @@ class SendController extends Notifier<SendUiState> {
   }
 
   /// Builds a retry session from the failed (file, recipient) pairs of the
-  /// last snapshot — only what failed is re-sent, to the same recipients.
+  /// last snapshot — only what failed is re-sent, to the same recipients,
+  /// with the ORIGINAL caption, pacing and mode.
   SendSessionConfig? buildRetryConfig() {
-    final snapshot = state.snapshot;
-    if (snapshot == null) return null;
-    final failed = snapshot.items
-        .where((item) => item.status == SendItemStatus.failed)
-        .toList();
-    if (failed.isEmpty) return null;
-
-    final targets = <SendTarget>[];
-    final assignments = <SendAssignment>[];
-    for (final item in failed) {
-      var index = targets.indexWhere((t) => t.chatId == item.targetChatId);
-      if (index == -1) {
-        targets.add(
-          SendTarget(chatId: item.targetChatId, title: item.targetTitle),
-        );
-        index = targets.length - 1;
-      }
-      assignments.add(
-        SendAssignment(
-          targetIndex: index,
-          path: item.path,
-          photoIndex: item.photoIndex,
-          kind: item.kind,
-        ),
-      );
-    }
-    return SendSessionConfig(
-      targets: targets,
-      filePaths: [for (final a in assignments) a.path],
-      mode: SendMode.individual,
-      assignments: assignments,
+    return buildRetrySessionConfig(
+      snapshot: state.snapshot,
+      original: _lastConfig,
     );
   }
+}
+
+/// Pure helper so retry-config building is unit-testable without Riverpod.
+SendSessionConfig? buildRetrySessionConfig({
+  required SendProgressSnapshot? snapshot,
+  SendSessionConfig? original,
+}) {
+  if (snapshot == null) return null;
+  final failed = snapshot.items
+      .where((item) => item.status == SendItemStatus.failed)
+      .toList();
+  if (failed.isEmpty) return null;
+
+  final targets = <SendTarget>[];
+  final assignments = <SendAssignment>[];
+  for (final item in failed) {
+    var index = targets.indexWhere((t) => t.chatId == item.targetChatId);
+    if (index == -1) {
+      targets.add(
+        SendTarget(chatId: item.targetChatId, title: item.targetTitle),
+      );
+      index = targets.length - 1;
+    }
+    assignments.add(
+      SendAssignment(
+        targetIndex: index,
+        path: item.path,
+        photoIndex: item.photoIndex,
+        kind: item.kind,
+      ),
+    );
+  }
+  return SendSessionConfig(
+    targets: targets,
+    filePaths: [for (final a in assignments) a.path],
+    mode: original?.mode ?? SendMode.individual,
+    caption: original?.caption,
+    extraDelay:
+        original?.extraDelay ?? const Duration(milliseconds: 1200),
+    assignments: assignments,
+  );
 }
 
 final sendProvider =
