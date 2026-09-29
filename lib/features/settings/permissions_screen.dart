@@ -20,7 +20,8 @@ class PermissionsScreen extends ConsumerStatefulWidget {
   ConsumerState<PermissionsScreen> createState() => _PermissionsScreenState();
 }
 
-class _PermissionsScreenState extends ConsumerState<PermissionsScreen> {
+class _PermissionsScreenState extends ConsumerState<PermissionsScreen>
+    with WidgetsBindingObserver {
   _PermStatus _notifications = _PermStatus.checking;
   _PermStatus _install = _PermStatus.checking;
   _PermStatus _battery = _PermStatus.checking;
@@ -28,21 +29,32 @@ class _PermissionsScreenState extends ConsumerState<PermissionsScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _refresh();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // The user may grant/revoke a permission in system settings and come
+    // straight back — statuses would otherwise stay stale until reopen.
+    if (state == AppLifecycleState.resumed) _refresh();
   }
 
   Future<void> _refresh() async {
     final notifGranted = await Permission.notification.isGranted;
-    final notifPermanent = await Permission.notification.isPermanentlyDenied;
     final installGranted = await ref.read(installerProvider).canRequestInstall();
     final batteryIgnored =
         await FlutterForegroundTask.isIgnoringBatteryOptimizations;
 
     if (!mounted) return;
     setState(() {
-      _notifications = notifGranted
-          ? _PermStatus.granted
-          : (notifPermanent ? _PermStatus.denied : _PermStatus.denied);
+      _notifications = notifGranted ? _PermStatus.granted : _PermStatus.denied;
       _install =
           installGranted ? _PermStatus.granted : _PermStatus.denied;
       _battery =
