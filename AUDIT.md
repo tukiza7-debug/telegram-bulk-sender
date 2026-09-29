@@ -132,3 +132,27 @@ clean. Final gate: `flutter analyze` → **No issues found**, `flutter test` →
 ---
 
 **Verdict: 7/7 audits passed.** Cleared to push `main` and tag `v1.1.0`.
+
+---
+
+## Post-audit addendum — CI release build verification
+
+The release workflow surfaced two Android-level issues that are invisible to
+`flutter analyze` / `flutter test` (both were caught by the CI build gate and
+fixed before the release was published):
+
+1. **file_picker 11.x Android module** — `GeneratedPluginRegistrant` failed
+   with `cannot find symbol: FilePickerPlugin` (federated packaging issue in
+   11.0.3). Fix: pinned `file_picker ^8.3.7` (monolithic, battle-tested
+   Android plugin; same `FilePicker.platform.pickFiles` API; win32 ^5 stays
+   compatible with flutter_secure_storage 9.x).
+2. **AAR metadata conflict** — `:file_picker:checkReleaseAarMetadata` failed:
+   `flutter_plugin_android_lifecycle >= 2.0.22` demands compileSdk 36 while
+   file_picker 8.3.7 compiles against SDK 34. Fix: `dependency_overrides`
+   pinned `flutter_plugin_android_lifecycle: 2.0.20` (newest release still
+   targeting SDK 34; satisfies every consumer's `^2.0.x` constraint).
+
+Final result: run [36624419840](https://github.com/tukiza7-debug/telegram-bulk-sender/actions/runs/36624419840)
+— **all 17 steps green**, including `apksigner verify` of the signed APK.
+Release **v1.1.0** published with `telegram-bulk-sender-v1.1.0.apk`
+(56,695,928 bytes) + `checksums.txt`.
