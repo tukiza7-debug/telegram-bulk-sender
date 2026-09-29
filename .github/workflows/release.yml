@@ -117,13 +117,31 @@ jobs:
           cat checksums.txt
 
       - name: Verify APK is actually signed with the release key
+        env:
+          EXPECTED_CERT_SHA256: ${{ secrets.EXPECTED_CERT_SHA256 }}
         run: |
           set -euo pipefail
-          KS=android/app/upload-keystore.jks
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort | tail -n1)
-          CERT="$("$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-release.apk | grep -i 'CN=' || true)"
-          echo "${CERT}"
-          if [[ -z "${CERT}" ]]; then echo "APK is not signed"; exit 1; fi
+          RAW="$("$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-release.apk | grep -i 'SHA-256 digest' || true)"
+          echo "${RAW}"
+          ACTUAL="$(echo "${RAW}" | head -n1 | sed -E 's/.*digest: *//' | tr -d ' :' | tr '[:upper:]' '[:lower:]')"
+          EXPECTED="$(echo "${EXPECTED_CERT_SHA256}" | tr -d ' :' | tr '[:upper:]' '[:lower:]')"
+          if [[ -z "${EXPECTED}" ]]; then
+            echo "EXPECTED_CERT_SHA256 secret is not set — refusing to publish an unverifiable APK."
+            echo "Pin the release certificate digest (see checksums.txt workflow docs) and re-run."
+            exit 1
+          fi
+          if [[ -z "${ACTUAL}" ]]; then
+            echo "APK has no readable signing certificate."; exit 1
+          fi
+          if [[ "${ACTUAL}" != "${EXPECTED}" ]]; then
+            echo "Certificate mismatch: the APK was NOT signed with the pinned release key."
+            echo "actual:   ${ACTUAL}"
+            echo "expected: ${EXPECTED}"
+            echo "If the release key was deliberately rotated, update the EXPECTED_CERT_SHA256 secret with the actual digest above."
+            exit 1
+          fi
+          echo "APK is signed with the pinned release certificate."
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
