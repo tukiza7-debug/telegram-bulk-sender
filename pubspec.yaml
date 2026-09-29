@@ -40,6 +40,14 @@ dev_dependencies:
     sdk: flutter
   flutter_lints: ^6.0.0
 
+dependency_overrides:
+  # file_picker 8.3.7 compiles its Android module against SDK 34, while
+  # flutter_plugin_android_lifecycle >= 2.0.22 ships AAR metadata demanding
+  # compileSdk 36 — which fails ':file_picker:checkReleaseAarMetadata'.
+  # 2.0.20 is the newest release that still targets SDK 34; it satisfies
+  # every consumer's ^2.0.x constraint.
+  flutter_plugin_android_lifecycle: 2.0.20
+
 flutter:
   uses-material-design: true
 
