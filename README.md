@@ -1,17 +1,17 @@
 # Telegram Bulk Sender
 
-**Send albums of photos to your Telegram chats, groups and channels — in bulk, with progress, retries and rate-limit handling.**
+**Send photos, videos and documents to your Telegram chats, groups and channels — in bulk, with progress, retries and rate-limit handling.**
 
 [![Latest release](https://img.shields.io/github/v/release/tukiza7-debug/telegram-bulk-sender?include_prereleases&label=release)](https://github.com/tukiza7-debug/telegram-bulk-sender/releases/latest)
 [![Build](https://img.shields.io/github/actions/workflow/status/tukiza7-debug/telegram-bulk-sender/release.yml?branch=main&label=build)](https://github.com/tukiza7-debug/telegram-bulk-sender/actions/workflows/release.yml)
 [![License: MIT](https://img.shields.io/badge/licence-MIT-green.svg)](LICENSE)
 
 Telegram Bulk Sender is a native Android app (Flutter) that drives the
-**Telegram Bot API** to bulk-send photos: pick many images, choose the
-recipients, and let the app deliver them as albums (up to 10 per message) or
-as individual photos — with a live progress screen, pause/cancel, automatic
-HTTP 429 handling, and sending that continues in the background via a
-foreground service.
+**Telegram Bot API** to bulk-send media: pick many photos, videos and
+documents, choose the recipients, and let the app deliver them as albums (up
+to 10 photos/videos per message) or as individual files — with a live
+progress screen, pause/cancel, automatic HTTP 429 handling, and sending that
+continues in the background via a foreground service.
 
 ## Screenshots
 
@@ -22,33 +22,49 @@ after the screens they show:
 | --- | --- |
 | `01_onboarding.png` | Bot token onboarding |
 | `02_home.png` | Home — recipients management |
-| `03_picker.png` | Photo picker grid (reorderable) |
+| `03_picker.png` | File picker grid (photos, videos, documents — reorderable) |
 | `04_review.png` | Send review (mode, caption, pacing) |
 | `05_progress.png` | Live send progress |
-| `06_settings.png` | Settings (permissions, updates, about) |
+| `06_settings.png` | Settings (reconnect token, permissions, updates, about) |
 
 ## Features
 
 - **Bot token onboarding** — validate with `getMe` before saving; the token
   is stored encrypted (`flutter_secure_storage`) and never logged.
+- **Paste-proof token handling** — tokens copied out of @BotFather messages,
+  URLs, password managers or notes are cleaned automatically before
+  validation: labels like "Token:", Markdown backticks, quotes, zero-width
+  characters, fullwidth colons and internal whitespace are all stripped, so
+  a **real token validates on the first try**.
+- **Reconnect token from Settings** — if the token was regenerated with
+  `/revoke` in @BotFather (or the app reports "Invalid bot token"),
+  **Settings → Reconnect token** lets you validate and replace it without
+  losing recipients or history.
 - **Recipients** — save any number of chat IDs or `@channelusernames`,
   verified through `getChat` before they are saved. Add, rename, remove.
-- **Photo picking** — multi-select via the Android system Photo Picker (no
-  storage permission needed on Android 13+), grid preview, long-press drag
-  to reorder, remove individual photos.
-- **Two send modes** — `sendMediaGroup` albums (max 10 per group) or
-  `sendPhoto` one-by-one, with optional caption and configurable pacing
-  between batches.
+- **File picking: photos, videos, documents** — photos via the Android
+  system Photo Picker, videos (MP4, MOV, MKV, WebM…) and any documents
+  (PDF, ZIP, GIF, audio…) via the system file picker — all multi-select,
+  all without any storage permission. Grid preview with kind badges,
+  long-press drag to reorder, remove individual files.
+- **Two send modes** — `sendMediaGroup` albums (max 10, photos and videos
+  can be mixed) or individual `sendPhoto` / `sendVideo` / `sendDocument`
+  per file, with optional caption and configurable pacing between batches.
+  Documents are always sent as individual messages (Telegram does not allow
+  them in media groups).
 - **Rate-limit aware** — proactive per-chat pacing, HTTP 429 handled with
   `retry_after`, exponential backoff for transient errors, and automatic
   resume after network failures.
-- **Live progress** — per-photo status, success/fail counts, pause, resume,
-  cancel, and one-tap **retry of exactly what failed**.
+- **Live progress** — per-file status ("Photo 3", "Video 2", the document's
+  name), success/fail counts, pause, resume, cancel, and one-tap **retry of
+  exactly what failed**.
 - **Background sending** — the whole session runs in a foreground service
   (`dataSync` type, Android 14+ compatible) with a progress notification and
   notification action buttons.
-- **Oversized photo handling** — photos above Telegram's 10 MB photo limit
-  are re-compressed/resized automatically before sending.
+- **Oversized file handling** — photos above Telegram's 10 MB photo limit
+  are re-compressed/resized automatically before sending; videos and
+  documents above the 50 MB bot upload cap are flagged **before** the send
+  starts, so no data is wasted on an upload that would be rejected.
 - **In-app updates** — checks GitHub Releases (on open, manually, and every
   6 h in the background), notifies once per version, downloads the APK with
   progress, verifies the published SHA-256 checksum, and prompts the system
@@ -102,7 +118,7 @@ remains functional if you deny any of them.
 | --- | --- | --- |
 | `INTERNET` | Automatically (normal permission) | Talk to `api.telegram.org` and `api.github.com`. |
 | `POST_NOTIFICATIONS` (Android 13+) | Right after onboarding, with a rationale screen | Update alerts + background send progress. Denied → in-app banners only. |
-| Photo Picker (no permission) | When you tap "Select photos" | System picker; the app never needs `READ_MEDIA_IMAGES`. |
+| Photo/Video/Document pickers (no permission) | When you tap "Choose files" | System pickers (Photo Picker + SAF); the app never needs `READ_MEDIA_*`. |
 | `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_DATA_SYNC` | Automatically (normal permissions) | Keep bulk sending alive in the background with a visible notification. |
 | `WAKE_LOCK`, `RECEIVE_BOOT_COMPLETED` | Automatically (normal permissions) | Keep the device awake during long uploads and let WorkManager restore its periodic update check after reboot. |
 | `REQUEST_INSTALL_PACKAGES` | Shown/used only on the first "Update now" | Lets the system install the downloaded update APK. Never used silently. |
@@ -127,23 +143,26 @@ remains functional if you deny any of them.
 ## Usage
 
 1. **Home** → *Add recipient* (repeat for every target).
-2. **Choose photos** → multi-select, drag to reorder, remove as needed.
+2. **Choose files** → *Add* → Photos / Videos / Documents, multi-select,
+   drag to reorder, remove as needed.
 3. **Continue** → pick a mode:
-   - *Album*: photos are grouped up to 10 per `sendMediaGroup`; the caption
-     is applied once per album. If Telegram rejects an album, the app
-     automatically retries its photos individually so one bad image does not
+   - *Album*: photos and videos are grouped up to 10 per `sendMediaGroup`
+     (they can be mixed); the caption is applied once per album. Documents
+     travel as separate messages. If Telegram rejects an album, the app
+     automatically retries its files individually so one bad image does not
      sink the batch.
-   - *Individual*: one `sendPhoto` per photo; the caption is applied to every
-     photo.
+   - *Individual*: one message per file via `sendPhoto` / `sendVideo` /
+     `sendDocument`; the caption is applied to every file.
 4. Set an optional caption (≤ 1024 chars) and the pacing delay, then **Send**.
 5. Watch progress; pause/cancel any time. Failed pairs can be retried
-   exactly (same photo, same recipient) with one tap.
+   exactly (same file, same recipient) with one tap.
 
 **Telegram limits to keep in mind** — photos must be ≤ 10 MB (the app
-compresses larger ones automatically), albums hold at most 10 items, and
-Telegram enforces roughly 30 messages/second globally and about
-20 messages/minute per group/channel. The app paces itself proactively and
-handles HTTP 429 `retry_after` automatically, but very large jobs simply
+compresses larger ones automatically), videos and documents sent by bots
+must be ≤ 50 MB (oversized files are flagged before sending), albums hold at
+most 10 items, and Telegram enforces roughly 30 messages/second globally and
+about 20 messages/minute per group/channel. The app paces itself proactively
+and handles HTTP 429 `retry_after` automatically, but very large jobs simply
 take time.
 
 ## Build from source
@@ -199,7 +218,7 @@ key; CI builds always use the real release keystore (below).
      `--build-name=X.Y.Z --build-number=$GITHUB_RUN_NUMBER` to
      `flutter build apk`. `versionCode` therefore equals the CI run number
      and always increases — it can never repeat or go down.
-   - `pubspec.yaml` carries a default (`1.0.0+1`) for local builds only.
+   - `pubspec.yaml` carries a default (`1.1.0+1`) for local builds only.
    - The version shown in **Settings → About** always matches the GitHub
      release tag.
    - **No `--split-per-abi`**: a single universal APK keeps one `versionCode`
@@ -209,6 +228,13 @@ key; CI builds always use the real release keystore (below).
 
 ## Troubleshooting
 
+- **"Invalid bot token"** — make sure the whole token (including the part
+  after the colon) was copied. The app cleans up labels, spaces and stray
+  characters automatically, so a real token should validate on the first
+  try. If you regenerated the token with `/revoke` in @BotFather, the old
+  one stops working: open **Settings → Reconnect token**, paste the new
+  token, and it will be validated against `getMe` and swapped in —
+  recipients and history are kept.
 - **"App not installed"** — a different signing key than the installed
   build. Uninstall the old app first; then always update via the in-app
   updater (same key).

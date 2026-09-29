@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import '../network/telegram_api_client.dart';
 import '../network/telegram_exceptions.dart';
 import 'models.dart';
@@ -12,9 +14,23 @@ abstract class TelegramGateway {
     RetryWaitListener? onWait,
   });
 
+  Future<void> sendVideo(
+    String chatId,
+    String path,
+    String? caption, {
+    RetryWaitListener? onWait,
+  });
+
+  Future<void> sendDocument(
+    String chatId,
+    String path,
+    String? caption, {
+    RetryWaitListener? onWait,
+  });
+
   Future<void> sendMediaGroup(
     String chatId,
-    List<String> paths,
+    List<({String path, SendKind kind})> items,
     String? caption, {
     RetryWaitListener? onWait,
   });
@@ -36,22 +52,43 @@ class TelegramGatewayImpl implements TelegramGateway {
   }
 
   @override
-  Future<void> sendMediaGroup(
+  Future<void> sendVideo(
     String chatId,
-    List<String> paths,
+    String path,
     String? caption, {
     RetryWaitListener? onWait,
   }) async {
-    await _api.sendMediaGroup(chatId, paths, caption, onWait: onWait);
+    await _api.sendVideo(chatId, path, caption, onWait: onWait);
+  }
+
+  @override
+  Future<void> sendDocument(
+    String chatId,
+    String path,
+    String? caption, {
+    RetryWaitListener? onWait,
+  }) async {
+    await _api.sendDocument(chatId, path, caption, onWait: onWait);
+  }
+
+  @override
+  Future<void> sendMediaGroup(
+    String chatId,
+    List<({String path, SendKind kind})> items,
+    String? caption, {
+    RetryWaitListener? onWait,
+  }) async {
+    await _api.sendMediaGroup(chatId, items, caption, onWait: onWait);
   }
 }
 
 /// Orchestrates a bulk send session.
 ///
-/// Work is modeled as (photo x recipient) pairs so progress is exact per
-/// recipient. Album mode groups each recipient's photos into chunks of 10;
-/// if Telegram rejects a chunk, it is retried photo-by-photo so one bad
-/// image does not sink the whole album.
+/// Work is modeled as (file x recipient) pairs so progress is exact per
+/// recipient. Album mode groups each recipient's photos and videos into
+/// chunks of 10 (documents cannot join media groups and are always sent
+/// one by one); if Telegram rejects a chunk, it is retried file-by-file so
+/// one bad image does not sink the whole album.
 ///
 /// Honors 429 retry_after (via the client's retry loop, surfaced through
 /// wait messages), adds user-configured pacing between batches, supports
@@ -105,9 +142,11 @@ class SendingEngine {
     _emit(_snapshot);
 
     // Preparation phase (compression of oversized photos), once per file.
+    // Videos and documents are uploaded as-is.
     if (prepare != null) {
       final prepared = <String, String>{};
       for (final item in _liveItems) {
+        if (item.kind != SendKind.photo) continue;
         if (prepared.containsKey(item.path)) {
           item.path = prepared[item.path]!;
           continue;
@@ -148,7 +187,7 @@ class SendingEngine {
     return _snapshot;
   }
 
-  /// Expands the config into the flat work list (photo x recipient pairs).
+  /// Expands the config into the flat work list (file x recipient pairs).
   List<SendItemState> _buildItems() {
     final assignments = config.assignments;
     if (assignments != null && assignments.isNotEmpty) {
@@ -159,6 +198,7 @@ class SendingEngine {
             return SendItemState(
               path: assignment.path,
               photoIndex: assignment.photoIndex,
+              kind: assignment.kind,
               targetChatId: target.chatId,
               targetTitle: target.title,
             );
@@ -171,6 +211,7 @@ class SendingEngine {
           SendItemState(
             path: config.filePaths[i],
             photoIndex: i + 1,
+            kind: config.kindAt(i),
             targetChatId: target.chatId,
             targetTitle: target.title,
           ),
@@ -187,22 +228,40 @@ class SendingEngine {
       await _drainPause();
       if (_cancelRequested) return;
 
+      final item = targetItems[index];
+      if (item.status != SendItemStatus.pending) {
+        index++;
+        continue;
+      }
+
+      // Telegram does not allow documents in media groups — flush any open
+      // photo/video chunk and send the document on its own.
+      if (item.kind == SendKind.document) {
+        await _sendOne(item);
+        index++;
+        if (index < targetItems.length) {
+          await _interruptibleDelay(config.extraDelay);
+        }
+        continue;
+      }
+
       final chunk = <SendItemState>[];
       while (chunk.length < SendSessionConfig.albumMax &&
           index < targetItems.length) {
-        final item = targetItems[index];
-        if (item.status == SendItemStatus.pending) chunk.add(item);
+        final next = targetItems[index];
+        if (next.kind == SendKind.document) break; // handled on its own
+        if (next.status == SendItemStatus.pending) chunk.add(next);
         index++;
       }
-      if (chunk.isEmpty) break;
+      if (chunk.isEmpty) continue;
 
       await _limiter.acquire(target.chatId);
       if (!await _sendChunkAsAlbum(chunk)) {
-        // Fall back to per-photo so one bad image doesn't fail all 10.
-        for (final item in chunk) {
+        // Fall back to per-file so one bad image doesn't fail all 10.
+        for (final chunkItem in chunk) {
           if (_cancelRequested) return;
           await _drainPause();
-          await _sendOne(item);
+          await _sendOne(chunkItem);
         }
       }
 
@@ -221,7 +280,7 @@ class SendingEngine {
     try {
       await _gateway.sendMediaGroup(
         chunk.first.targetChatId,
-        [for (final i in chunk) i.path],
+        [for (final i in chunk) (path: i.path, kind: i.kind)],
         config.caption,
         onWait: (seconds, reason) =>
             _emitWaiting('Rate limited — resuming in ${seconds}s'),
@@ -265,13 +324,36 @@ class SendingEngine {
     item.status = SendItemStatus.sending;
     _emit(_current(_snapshot.phase));
     try {
-      await _gateway.sendPhoto(
-        item.targetChatId,
-        item.path,
-        config.caption,
-        onWait: (seconds, reason) =>
-            _emitWaiting('Rate limited — resuming in ${seconds}s'),
-      );
+      // Reject oversized uploads up front: videos/documents cannot be
+      // compressed here, so a 200 MB file would only burn data and time
+      // before Telegram refuses it. Missing files skip this gate and fail
+      // in the send call below instead.
+      var bytes = 0;
+      try {
+        bytes = File(item.path).lengthSync();
+      } on FileSystemException {
+        bytes = 0;
+      }
+      if (bytes > item.kind.maxBytes) {
+        throw TelegramApiException(
+          kind: TelegramErrorKind.fileTooLarge,
+          description: 'file too big',
+        );
+      }
+      void onWait(int seconds, String reason) {
+        _emitWaiting('Rate limited — resuming in ${seconds}s');
+      }
+      switch (item.kind) {
+        case SendKind.photo:
+          await _gateway.sendPhoto(
+            item.targetChatId, item.path, config.caption, onWait: onWait);
+        case SendKind.video:
+          await _gateway.sendVideo(
+            item.targetChatId, item.path, config.caption, onWait: onWait);
+        case SendKind.document:
+          await _gateway.sendDocument(
+            item.targetChatId, item.path, config.caption, onWait: onWait);
+      }
       item
         ..status = SendItemStatus.success
         ..error = null;
@@ -330,6 +412,7 @@ class SendingEngine {
           SendItemState(
             path: item.path,
             photoIndex: item.photoIndex,
+            kind: item.kind,
             targetChatId: item.targetChatId,
             targetTitle: item.targetTitle,
             status: item.status,

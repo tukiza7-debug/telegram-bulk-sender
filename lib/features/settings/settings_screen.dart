@@ -34,6 +34,15 @@ class SettingsScreen extends ConsumerWidget {
                   title: Text(username.isEmpty ? 'Bot' : username),
                   subtitle: const Text('Connected bot'),
                 ),
+                ListTile(
+                  leading: const Icon(Symbols.sync_rounded),
+                  title: const Text('Reconnect token'),
+                  subtitle: const Text(
+                    'Token changed or invalid? Validate a new one',
+                  ),
+                  trailing: const Icon(Symbols.chevron_right_rounded),
+                  onTap: () => context.push('/settings/reconnect'),
+                ),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: AppDimens.s16),
                   child: SizedBox(

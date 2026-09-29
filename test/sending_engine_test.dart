@@ -10,11 +10,14 @@ class FakeGateway implements TelegramGateway {
   FakeGateway({this.failAlbumOnceFor, this.rateLimitTimes = 0});
 
   final List<String> sentPhotos = [];
+  final List<String> sentVideos = [];
+  final List<String> sentDocuments = [];
   final List<List<String>> sentAlbums = [];
+  final List<List<String>> sentAlbumKinds = [];
   final int rateLimitTimes;
 
   /// When set, the first album call for this chat fails (simulating one bad
-  /// photo) and the caller falls back to individual sends.
+  /// file) and the caller falls back to individual sends.
   final String? failAlbumOnceFor;
   final Set<String> _failedAlbumChats = {};
   int _rateLimitedCalls = 0;
@@ -36,18 +39,39 @@ class FakeGateway implements TelegramGateway {
   }
 
   @override
-  Future<void> sendMediaGroup(
+  Future<void> sendVideo(
     String chatId,
-    List<String> paths,
+    String path,
     String? caption, {
     RetryWaitListener? onWait,
   }) async {
-    sentAlbums.add(paths);
+    sentVideos.add(path);
+  }
+
+  @override
+  Future<void> sendDocument(
+    String chatId,
+    String path,
+    String? caption, {
+    RetryWaitListener? onWait,
+  }) async {
+    sentDocuments.add(path);
+  }
+
+  @override
+  Future<void> sendMediaGroup(
+    String chatId,
+    List<({String path, SendKind kind})> items,
+    String? caption, {
+    RetryWaitListener? onWait,
+  }) async {
+    sentAlbums.add([for (final item in items) item.path]);
+    sentAlbumKinds.add([for (final item in items) item.kind.name]);
     final trigger = failAlbumOnceFor;
     if (trigger != null &&
         chatId == trigger &&
         !_failedAlbumChats.contains(chatId) &&
-        paths.length > 1) {
+        items.length > 1) {
       _failedAlbumChats.add(chatId);
       throw TelegramApiException(
         kind: TelegramErrorKind.badRequest,
@@ -62,6 +86,7 @@ SendSessionConfig config({
   required List<String> paths,
   required int targetCount,
   SendMode mode = SendMode.album,
+  List<SendKind> kinds = const [],
 }) {
   return SendSessionConfig(
     targets: [
@@ -69,6 +94,7 @@ SendSessionConfig config({
         SendTarget(chatId: 'chat-$i', title: 'Chat $i'),
     ],
     filePaths: paths,
+    fileKinds: kinds,
     mode: mode,
   );
 }
@@ -222,6 +248,72 @@ void main() {
       expect(engine.snapshot.phase, SendPhase.finished);
       expect(engine.snapshot.successCount, 2);
       expect(seenPaused.contains(true), isTrue);
+    });
+
+    test('videos are sent via sendVideo (individual mode)', () async {
+      final gateway = FakeGateway();
+      final paths = ['/tmp/clip1.mp4', '/tmp/clip2.mov'];
+      final engine = SendingEngine(
+        gateway: gateway,
+        config: config(
+          paths: paths,
+          targetCount: 1,
+          mode: SendMode.individual,
+          kinds: const [SendKind.video, SendKind.video],
+        ),
+        sleep: instantSleep,
+        rateLimiter: RateLimiter(sleep: instantSleep),
+      );
+
+      await engine.run();
+
+      expect(gateway.sentVideos.length, 2);
+      expect(gateway.sentPhotos, isEmpty);
+      expect(engine.snapshot.successCount, 2);
+    });
+
+    test('documents never join albums — they are sent one by one', () async {
+      final gateway = FakeGateway();
+      final paths = ['/tmp/doc.pdf', '/tmp/photo.jpg', '/tmp/doc2.pdf'];
+      final engine = SendingEngine(
+        gateway: gateway,
+        config: config(
+          paths: paths,
+          targetCount: 1,
+          kinds: const [SendKind.document, SendKind.photo, SendKind.document],
+        ),
+        sleep: instantSleep,
+        rateLimiter: RateLimiter(sleep: instantSleep),
+      );
+
+      await engine.run();
+
+      expect(gateway.sentDocuments.length, 2);
+      expect(gateway.sentAlbums.length, 1); // only the photo album
+      expect(gateway.sentAlbums[0].length, 1);
+      expect(engine.snapshot.successCount, 3);
+    });
+
+    test('mixed photo+video albums preserve order and kinds', () async {
+      final gateway = FakeGateway();
+      final paths = ['/tmp/a.jpg', '/tmp/b.mp4', '/tmp/c.jpg'];
+      final engine = SendingEngine(
+        gateway: gateway,
+        config: config(
+          paths: paths,
+          targetCount: 1,
+          kinds: const [SendKind.photo, SendKind.video, SendKind.photo],
+        ),
+        sleep: instantSleep,
+        rateLimiter: RateLimiter(sleep: instantSleep),
+      );
+
+      await engine.run();
+
+      expect(gateway.sentAlbums.length, 1);
+      expect(gateway.sentAlbums[0], paths);
+      expect(gateway.sentAlbumKinds[0], ['photo', 'video', 'photo']);
+      expect(engine.snapshot.successCount, 3);
     });
   });
 }

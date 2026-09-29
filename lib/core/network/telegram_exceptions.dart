@@ -31,8 +31,13 @@ class TelegramApiException implements Exception {
       case TelegramErrorKind.forbidden:
         return 'The bot is not allowed to post here. Add the bot as an admin of the chat/channel.';
       case TelegramErrorKind.fileTooLarge:
-        return 'A photo is still too large after compression. Try removing it.';
+        return 'The file is too large for Telegram bots (photos max 10 MB, '
+            'videos and documents max 50 MB). Try removing it.';
       case TelegramErrorKind.badRequest:
+        if (description.contains('NOT_A_TOKEN')) {
+          return "That doesn't look like a bot token. Copy the full token "
+              'from @BotFather — it looks like 123456789:AAH3x…';
+        }
         if (description.contains('PHOTO_INVALID_DIMENSIONS')) {
           return 'A photo has invalid dimensions for Telegram.';
         }

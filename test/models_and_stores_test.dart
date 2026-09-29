@@ -118,4 +118,82 @@ void main() {
       expect(entries.first.id, '59');
     });
   });
+
+  group('SendSessionConfig JSON', () {
+    test('round-trips fileKinds (v1.1.0 payload)', () {
+      const config = SendSessionConfig(
+        targets: [
+          SendTarget(chatId: '-100123', title: 'News'),
+          SendTarget(chatId: '789', title: 'Ali'),
+        ],
+        filePaths: ['/tmp/a.jpg', '/tmp/b.mp4', '/tmp/c.pdf'],
+        fileKinds: [SendKind.photo, SendKind.video, SendKind.document],
+        mode: SendMode.album,
+        caption: 'Hello',
+        extraDelay: Duration(milliseconds: 1500),
+      );
+
+      final decoded = SendSessionConfig.decode(config.encode());
+
+      expect(decoded.fileKinds, config.fileKinds);
+      expect(decoded.filePaths, config.filePaths);
+      expect(decoded.targets.length, 2);
+      expect(decoded.targets[1].title, 'Ali');
+      expect(decoded.caption, 'Hello');
+      expect(decoded.extraDelay, const Duration(milliseconds: 1500));
+    });
+
+    test('legacy v1.0.0 payload (no fileKinds) falls back to extension detection', () {
+      const legacyJson = '''
+      {
+        "targets": [{"chatId": "-100123", "title": "News"}],
+        "filePaths": ["/tmp/old.jpg", "/tmp/clip.mp4"],
+        "mode": "individual",
+        "caption": null,
+        "extraDelayMs": 1200
+      }
+      ''';
+
+      final decoded = SendSessionConfig.decode(legacyJson);
+
+      expect(decoded.kindAt(0), SendKind.photo);
+      expect(decoded.kindAt(1), SendKind.video);
+    });
+
+    test('assignments carry their kind through JSON (retry sessions)', () {
+      const config = SendSessionConfig(
+        targets: [SendTarget(chatId: '-100123', title: 'News')],
+        filePaths: ['/tmp/report.pdf'],
+        mode: SendMode.individual,
+        assignments: [
+          SendAssignment(
+            targetIndex: 0,
+            path: '/tmp/report.pdf',
+            photoIndex: 1,
+            kind: SendKind.document,
+          ),
+        ],
+      );
+
+      final decoded = SendSessionConfig.decode(config.encode());
+
+      expect(decoded.assignments!.single.kind, SendKind.document);
+    });
+
+    test('SendKind.fromPath maps common extensions', () {
+      expect(SendKind.fromPath('/x/photo.jpeg'), SendKind.photo);
+      expect(SendKind.fromPath('/x/photo.webp'), SendKind.photo);
+      expect(SendKind.fromPath('/x/video.mp4'), SendKind.video);
+      expect(SendKind.fromPath('/x/video.MKV'), SendKind.video);
+      expect(SendKind.fromPath('/x/file.pdf'), SendKind.document);
+      expect(SendKind.fromPath('/x/anim.gif'), SendKind.document);
+      expect(SendKind.fromPath('/x/noext'), SendKind.document);
+    });
+
+    test('size caps: photos 10 MB, videos and documents 50 MB', () {
+      expect(SendKind.photo.maxBytes, 10 * 1024 * 1024);
+      expect(SendKind.video.maxBytes, 50 * 1024 * 1024);
+      expect(SendKind.document.maxBytes, 50 * 1024 * 1024);
+    });
+  });
 }

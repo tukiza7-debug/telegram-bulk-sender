@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:dio/dio.dart';
 
 import '../constants.dart';
+import '../sending/models.dart';
 import 'telegram_exceptions.dart';
 import 'telegram_models.dart';
 
@@ -176,17 +177,60 @@ class TelegramApiClient {
     return ((body['result'] as Map<String, dynamic>)['message_id'] as int?) ?? 0;
   }
 
-  /// Sends an album (max 10 photos). Caption is applied to the first item.
-  Future<List<int>> sendMediaGroup(
+  /// Sends a single video (mp4/mkv/mov/webm/…). Returns the message id.
+  Future<int> sendVideo(
     String chatId,
-    List<String> filePaths,
+    String filePath,
     String? caption, {
     RetryWaitListener? onWait,
   }) async {
+    final formData = FormData.fromMap(<String, dynamic>{
+      'chat_id': chatId,
+      if (caption != null && caption.isNotEmpty) 'caption': caption,
+      'supports_streaming': 'true',
+      'video': await MultipartFile.fromFile(
+        filePath,
+        filename: filePath.split('/').last,
+      ),
+    });
+    final body = await _post('sendVideo', formData, onWait: onWait);
+    return ((body['result'] as Map<String, dynamic>)['message_id'] as int?) ?? 0;
+  }
+
+  /// Sends any file as a document (PDF, ZIP, GIF, audio, …). Returns the
+  /// message id.
+  Future<int> sendDocument(
+    String chatId,
+    String filePath,
+    String? caption, {
+    RetryWaitListener? onWait,
+  }) async {
+    final formData = FormData.fromMap(<String, dynamic>{
+      'chat_id': chatId,
+      if (caption != null && caption.isNotEmpty) 'caption': caption,
+      'document': await MultipartFile.fromFile(
+        filePath,
+        filename: filePath.split('/').last,
+      ),
+    });
+    final body = await _post('sendDocument', formData, onWait: onWait);
+    return ((body['result'] as Map<String, dynamic>)['message_id'] as int?) ?? 0;
+  }
+
+  /// Sends an album (max 10 items). Photos and videos can be mixed; Telegram
+  /// does not allow documents inside media groups, so those are always sent
+  /// individually by the engine. Caption is applied to the first item.
+  Future<List<int>> sendMediaGroup(
+    String chatId,
+    List<({String path, SendKind kind})> items,
+    String? caption, {
+    RetryWaitListener? onWait,
+  }) async {
+    assert(items.isNotEmpty && items.length <= SendSessionConfig.albumMax);
     final media = <Map<String, dynamic>>[
-      for (var i = 0; i < filePaths.length; i++)
+      for (var i = 0; i < items.length; i++)
         <String, dynamic>{
-          'type': 'photo',
+          'type': items[i].kind == SendKind.video ? 'video' : 'photo',
           'media': 'attach://file$i',
           if (i == 0 && caption != null && caption.isNotEmpty) 'caption': caption,
         },
@@ -195,10 +239,10 @@ class TelegramApiClient {
       'chat_id': chatId,
       'media': jsonEncode(media),
     };
-    for (var i = 0; i < filePaths.length; i++) {
+    for (var i = 0; i < items.length; i++) {
       map['file$i'] = await MultipartFile.fromFile(
-        filePaths[i],
-        filename: filePaths[i].split('/').last,
+        items[i].path,
+        filename: items[i].path.split('/').last,
       );
     }
     final body = await _post('sendMediaGroup', FormData.fromMap(map), onWait: onWait);

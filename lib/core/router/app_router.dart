@@ -9,6 +9,7 @@ import '../../features/picker/photo_picker_screen.dart';
 import '../../features/send/send_progress_screen.dart';
 import '../../features/send/send_review_screen.dart';
 import '../../features/settings/permissions_screen.dart';
+import '../../features/settings/reconnect_token_screen.dart';
 import '../../features/settings/settings_screen.dart';
 import '../../features/update/update_screen.dart';
 
@@ -54,6 +55,10 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/settings/permissions',
       builder: (context, state) => const PermissionsScreen(),
+    ),
+    GoRoute(
+      path: '/settings/reconnect',
+      builder: (context, state) => const ReconnectTokenScreen(),
     ),
     GoRoute(
       path: '/update',

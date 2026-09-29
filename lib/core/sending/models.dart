@@ -5,6 +5,49 @@ import 'dart:convert';
 
 enum SendMode { album, individual }
 
+/// What kind of file an item is. Determines the Bot API method used
+/// (sendPhoto / sendVideo / sendDocument) and its size limits.
+enum SendKind { photo, video, document;
+
+  static SendKind fromPath(String path) {
+    final ext = path.contains('.')
+        ? path.substring(path.lastIndexOf('.') + 1).toLowerCase()
+        : '';
+    switch (ext) {
+      case 'jpg':
+      case 'jpeg':
+      case 'png':
+      case 'webp':
+      case 'heic':
+      case 'bmp':
+        return SendKind.photo;
+      case 'mp4':
+      case 'mov':
+      case 'avi':
+      case 'mkv':
+      case 'webm':
+      case 'm4v':
+      case '3gp':
+        return SendKind.video;
+      default:
+        // GIFs travel as documents so Telegram keeps the animation.
+        return SendKind.document;
+    }
+  }
+
+  /// Human label used in progress rows and summaries.
+  String get label => switch (this) {
+        SendKind.photo => 'Photo',
+        SendKind.video => 'Video',
+        SendKind.document => 'Document',
+      };
+
+  /// Bot API upload caps. Photos above 10 MB are auto-compressed before
+  /// sending; videos/documents cannot be compressed here, so anything over
+  /// 50 MB is rejected up front instead of failing after a long upload.
+  int get maxBytes => this == SendKind.photo ? 10 * 1024 * 1024 : 50 * 1024 * 1024;
+}
+
 enum SendItemStatus {
   pending,
   preparing,
@@ -44,16 +87,19 @@ class SendAssignment {
     required this.targetIndex,
     required this.path,
     required this.photoIndex,
+    this.kind = SendKind.photo,
   });
 
   final int targetIndex;
   final String path;
   final int photoIndex;
+  final SendKind kind;
 
   Map<String, dynamic> toJson() => {
         'targetIndex': targetIndex,
         'path': path,
         'photoIndex': photoIndex,
+        'kind': kind.name,
       };
 
   factory SendAssignment.fromJson(Map<String, dynamic> json) =>
@@ -61,6 +107,9 @@ class SendAssignment {
         targetIndex: json['targetIndex'] as int,
         path: json['path'] as String,
         photoIndex: json['photoIndex'] as int,
+        kind: json['kind'] == null
+            ? SendKind.photo
+            : SendKind.values.byName(json['kind'] as String),
       );
 }
 
@@ -73,13 +122,25 @@ class SendSessionConfig {
     this.caption,
     this.extraDelay = const Duration(milliseconds: 1200),
     this.assignments,
-  });
+    List<SendKind>? fileKinds,
+  }) : fileKinds = fileKinds ??
+            const [];
 
   final List<SendTarget> targets;
   final List<String> filePaths;
   final SendMode mode;
   final String? caption;
   final Duration extraDelay;
+
+  /// Parallel to [filePaths] (empty for retry sessions, which carry the kind
+  /// on each assignment). Falls back to extension-based detection when a
+  /// kind is missing, and to photo for legacy sessions stored on disk.
+  final List<SendKind> fileKinds;
+
+  SendKind kindAt(int index) {
+    if (index < fileKinds.length) return fileKinds[index];
+    return SendKind.fromPath(filePaths[index]);
+  }
 
   /// When set, the engine sends exactly these (target, photo) pairs instead
   /// of the full cross product. Used by "retry failed".
@@ -90,6 +151,7 @@ class SendSessionConfig {
   Map<String, dynamic> toJson() => {
         'targets': [for (final t in targets) t.toJson()],
         'filePaths': filePaths,
+        'fileKinds': [for (final k in fileKinds) k.name],
         'mode': mode.name,
         'caption': caption,
         'extraDelayMs': extraDelay.inMilliseconds,
@@ -108,6 +170,12 @@ class SendSessionConfig {
         filePaths: [
           for (final p in (json['filePaths'] as List<dynamic>)) p as String,
         ],
+        fileKinds: json['fileKinds'] == null
+            ? null
+            : [
+                for (final k in (json['fileKinds'] as List<dynamic>))
+                  SendKind.values.byName(k as String),
+              ],
         mode: SendMode.values.byName(json['mode'] as String),
         caption: json['caption'] as String?,
         extraDelay:
@@ -126,12 +194,13 @@ class SendSessionConfig {
       SendSessionConfig.fromJson(jsonDecode(raw) as Map<String, dynamic>);
 }
 
-/// Per-item runtime state inside a session. One item = one photo going to
-/// one recipient (photo x recipient pair).
+/// Per-item runtime state inside a session. One item = one file going to
+/// one recipient (file x recipient pair).
 class SendItemState {
   SendItemState({
     required this.path,
     this.photoIndex = 1,
+    this.kind = SendKind.photo,
     this.targetChatId = '',
     this.targetTitle = '',
     this.status = SendItemStatus.pending,
@@ -141,8 +210,9 @@ class SendItemState {
   /// Mutable so the engine can swap in the compressed file path.
   String path;
 
-  /// 1-based position of the photo within its recipient's batch.
+  /// 1-based position of the file within its recipient's batch.
   final int photoIndex;
+  final SendKind kind;
   final String targetChatId;
   final String targetTitle;
   SendItemStatus status;
@@ -151,6 +221,7 @@ class SendItemState {
   Map<String, dynamic> toJson() => {
         'path': path,
         'photoIndex': photoIndex,
+        'kind': kind.name,
         'targetChatId': targetChatId,
         'targetTitle': targetTitle,
         'status': status.name,
@@ -160,6 +231,9 @@ class SendItemState {
   factory SendItemState.fromJson(Map<String, dynamic> json) => SendItemState(
         path: json['path'] as String,
         photoIndex: json['photoIndex'] as int? ?? 1,
+        kind: json['kind'] == null
+            ? SendKind.photo
+            : SendKind.values.byName(json['kind'] as String),
         targetChatId: json['targetChatId'] as String? ?? '',
         targetTitle: json['targetTitle'] as String? ?? '',
         status: SendItemStatus.values.byName(json['status'] as String),

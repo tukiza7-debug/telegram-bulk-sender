@@ -74,7 +74,7 @@ class _SendProgressScreenState extends ConsumerState<SendProgressScreen> {
               tooltip: 'Close',
               onPressed: () {
                 ref.read(sendProvider.notifier).clearFinished();
-                ref.read(pendingPhotosProvider.notifier).clear();
+                ref.read(pendingFilesProvider.notifier).clear();
                 context.go('/');
               },
               icon: const Icon(Symbols.close_rounded),
@@ -210,7 +210,7 @@ class _Controls extends ConsumerWidget {
           TextButton(
             onPressed: () {
               ref.read(sendProvider.notifier).clearFinished();
-              ref.read(pendingPhotosProvider.notifier).clear();
+              ref.read(pendingFilesProvider.notifier).clear();
               context.go('/');
             },
             child: const Text('Back to home'),
@@ -355,6 +355,11 @@ class _ItemRow extends StatelessWidget {
         ),
     };
 
+    // Kind-aware row title: "Photo 3", "Video 2", or the document name.
+    final title = item.kind == SendKind.document
+        ? '${item.path.split('/').last} · ${item.targetTitle}'
+        : '${item.kind.label} ${item.photoIndex} · ${item.targetTitle}';
+
     return Container(
       padding: const EdgeInsets.all(AppDimens.s8),
       decoration: BoxDecoration(
@@ -363,32 +368,14 @@ class _ItemRow extends StatelessWidget {
       ),
       child: Row(
         children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(AppDimens.radiusSm),
-            child: SizedBox(
-              width: 48,
-              height: 48,
-              child: Image.file(
-                File(item.path),
-                fit: BoxFit.cover,
-                cacheWidth: 96,
-                errorBuilder: (_, _, _) => Container(
-                  color: theme.colorScheme.surfaceContainerHigh,
-                  child: Icon(
-                    Symbols.image_rounded,
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ),
-            ),
-          ),
+          _KindThumbnail(path: item.path, kind: item.kind),
           const SizedBox(width: AppDimens.s12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Photo ${item.photoIndex} · ${item.targetTitle}',
+                  title,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: theme.textTheme.titleSmall,
@@ -414,6 +401,62 @@ class _ItemRow extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Thumbnail by kind: photo preview, play badge for videos, file icon for
+/// documents.
+class _KindThumbnail extends StatelessWidget {
+  const _KindThumbnail({required this.path, required this.kind});
+
+  final String path;
+  final SendKind kind;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+
+    Widget child;
+    switch (kind) {
+      case SendKind.photo:
+        child = Image.file(
+          File(path),
+          fit: BoxFit.cover,
+          cacheWidth: 96,
+          errorBuilder: (_, _, _) => Container(
+            color: scheme.surfaceContainerHigh,
+            child: Icon(
+              Symbols.broken_image_rounded,
+              size: 20,
+              color: scheme.onSurfaceVariant,
+            ),
+          ),
+        );
+      case SendKind.video:
+        child = Container(
+          color: scheme.surfaceContainerHigh,
+          child: Icon(
+            Symbols.play_circle_rounded,
+            size: 24,
+            color: scheme.onSurfaceVariant,
+          ),
+        );
+      case SendKind.document:
+        child = Container(
+          color: scheme.surfaceContainerHigh,
+          child: Icon(
+            Symbols.description_rounded,
+            size: 24,
+            color: scheme.onSurfaceVariant,
+          ),
+        );
+    }
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(AppDimens.radiusSm),
+      child: SizedBox(width: 48, height: 48, child: child),
     );
   }
 }

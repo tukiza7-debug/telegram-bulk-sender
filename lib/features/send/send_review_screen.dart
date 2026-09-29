@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -9,7 +11,7 @@ import '../../core/sending/models.dart';
 import '../common/widgets.dart';
 
 /// Final confirmation: send mode, optional caption, inter-batch delay,
-/// and the primary Send action.
+/// and the primary Send action. Handles photos, videos and documents.
 class SendReviewScreen extends ConsumerStatefulWidget {
   const SendReviewScreen({super.key});
 
@@ -28,16 +30,35 @@ class _SendReviewScreenState extends ConsumerState<SendReviewScreen> {
     super.dispose();
   }
 
+  int _bytesOf(PendingFile file) {
+    try {
+      return File(file.path).lengthSync();
+    } on FileSystemException {
+      return 0;
+    }
+  }
+
+  /// Files that exceed Telegram's per-type bot upload cap. Videos and
+  /// documents cannot be compressed on-device, so they block the send
+  /// instead of failing after a long upload.
+  List<PendingFile> _oversized(List<PendingFile> files) => [
+        for (final file in files)
+          if (_bytesOf(file) > file.kind.maxBytes &&
+              file.kind != SendKind.photo)
+            file,
+      ];
+
   Future<void> _send() async {
-    final photos = ref.read(pendingPhotosProvider);
+    final files = ref.read(pendingFilesProvider);
     final targets = ref.read(targetsProvider);
-    if (photos.isEmpty || targets.isEmpty) return;
+    if (files.isEmpty || targets.isEmpty) return;
 
     final config = SendSessionConfig(
       targets: [
         for (final t in targets) SendTarget(chatId: t.chatId, title: t.title),
       ],
-      filePaths: photos,
+      filePaths: [for (final f in files) f.path],
+      fileKinds: [for (final f in files) f.kind],
       mode: _mode,
       caption: _captionController.text.trim().isEmpty
           ? null
@@ -56,28 +77,36 @@ class _SendReviewScreenState extends ConsumerState<SendReviewScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final photos = ref.watch(pendingPhotosProvider);
+    final files = ref.watch(pendingFilesProvider);
     final targets = ref.watch(targetsProvider);
     final send = ref.watch(sendProvider);
-    final totalBytes = directoryBytes(photos);
+    final totalBytes = directoryBytes([for (final f in files) f.path]);
+
+    final photoCount = files.where((f) => f.kind == SendKind.photo).length;
+    final videoCount = files.where((f) => f.kind == SendKind.video).length;
+    final docCount = files.where((f) => f.kind == SendKind.document).length;
+    final mediaCount = photoCount + videoCount;
+    final oversized = _oversized(files);
+    final hasMedia = mediaCount > 0;
 
     final captionLabel = _mode == SendMode.album
         ? 'Caption (applied once per album)'
-        : 'Caption (applied to every photo)';
+        : 'Caption (applied to every file)';
 
     return Scaffold(
       appBar: AppBar(title: const Text('Review send')),
-      body: photos.isEmpty || targets.isEmpty
+      body: files.isEmpty || targets.isEmpty
           ? EmptyState(
               icon: Symbols.warning_rounded,
-              title: photos.isEmpty ? 'No photos selected' : 'No recipients',
-              message: photos.isEmpty
-                  ? 'Go back and pick the photos you want to send.'
+              title: files.isEmpty ? 'No files selected' : 'No recipients',
+              message: files.isEmpty
+                  ? 'Go back and pick the photos, videos or documents you '
+                      'want to send.'
                   : 'Add at least one recipient from the home screen first.',
               action: FilledButton(
                 onPressed: () =>
-                    context.go(photos.isEmpty ? '/picker' : '/'),
-                child: Text(photos.isEmpty ? 'Select photos' : 'Add recipients'),
+                    context.go(files.isEmpty ? '/picker' : '/'),
+                child: Text(files.isEmpty ? 'Select files' : 'Add recipients'),
               ),
             )
           : ListView(
@@ -86,7 +115,7 @@ class _SendReviewScreenState extends ConsumerState<SendReviewScreen> {
                 Section(
                   title: 'Recipients',
                   subtitle:
-                      '${targets.length} recipient${targets.length == 1 ? '' : 's'} will receive the photos.',
+                      '${targets.length} recipient${targets.length == 1 ? '' : 's'} will receive the files.',
                   child: Wrap(
                     spacing: AppDimens.s8,
                     runSpacing: AppDimens.s8,
@@ -117,19 +146,23 @@ class _SendReviewScreenState extends ConsumerState<SendReviewScreen> {
                         selected: _mode == SendMode.album,
                         icon: Symbols.photo_library_rounded,
                         title: 'Album',
-                        description:
-                            'Groups of up to 10 photos per message. Faster '
-                            'and less noisy in the chat.',
+                        description: hasMedia
+                            ? 'Groups of up to 10 photos and videos per '
+                                'message. Documents are sent as separate '
+                                'messages. Faster and less noisy.'
+                            : 'Documents are always sent as individual '
+                                'messages — Telegram does not allow them in '
+                                'albums.',
                         onTap: () => setState(() => _mode = SendMode.album),
                       ),
                       const SizedBox(height: AppDimens.s8),
                       _ModeCard(
                         selected: _mode == SendMode.individual,
                         icon: Symbols.photo_rounded,
-                        title: 'Individual photos',
+                        title: 'Individual files',
                         description:
-                            'One message per photo. Better when you want each '
-                            'photo to stand alone.',
+                            'One message per file. Better when you want each '
+                            'item to stand alone.',
                         onTap: () =>
                             setState(() => _mode = SendMode.individual),
                       ),
@@ -199,30 +232,53 @@ class _SendReviewScreenState extends ConsumerState<SendReviewScreen> {
                     child: Column(
                       children: [
                         _SummaryRow(
-                          icon: Symbols.photo_rounded,
+                          icon: Symbols.image_rounded,
                           label: 'Photos',
-                          value:
-                              '${photos.length} · ${formatBytes(totalBytes)}',
+                          value: '$photoCount',
+                        ),
+                        const SizedBox(height: AppDimens.s8),
+                        _SummaryRow(
+                          icon: Symbols.videocam_rounded,
+                          label: 'Videos',
+                          value: '$videoCount',
+                        ),
+                        const SizedBox(height: AppDimens.s8),
+                        _SummaryRow(
+                          icon: Symbols.description_rounded,
+                          label: 'Documents',
+                          value: '$docCount',
+                        ),
+                        const SizedBox(height: AppDimens.s8),
+                        _SummaryRow(
+                          icon: Symbols.database_rounded,
+                          label: 'Total size',
+                          value: formatBytes(totalBytes),
                         ),
                         const SizedBox(height: AppDimens.s8),
                         _SummaryRow(
                           icon: Symbols.send_rounded,
                           label: 'Messages',
-                          value: _messageCountLabel(photos.length, targets.length),
+                          value: _messageCountLabel(mediaCount, docCount,
+                              targets.length),
                         ),
                         const SizedBox(height: AppDimens.s8),
                         _SummaryRow(
                           icon: Symbols.schedule_rounded,
                           label: 'Estimated time',
-                          value: _estimate(photos.length, targets.length),
+                          value: _estimate(mediaCount, docCount,
+                              targets.length),
                         ),
                       ],
                     ),
                   ),
                 ),
+                if (oversized.isNotEmpty) ...[
+                  const SizedBox(height: AppDimens.s16),
+                  _OversizedWarning(files: oversized, bytesOf: _bytesOf),
+                ],
               ],
             ),
-      bottomNavigationBar: photos.isEmpty || targets.isEmpty
+      bottomNavigationBar: files.isEmpty || targets.isEmpty
           ? null
           : SafeArea(
               child: Padding(
@@ -233,8 +289,11 @@ class _SendReviewScreenState extends ConsumerState<SendReviewScreen> {
                   AppDimens.s16,
                 ),
                 child: FilledButton.icon(
-                  onPressed:
-                      send.starting || send.running ? null : _send,
+                  onPressed: oversized.isNotEmpty ||
+                          send.starting ||
+                          send.running
+                      ? null
+                      : _send,
                   icon: send.starting
                       ? const SizedBox(
                           width: 18,
@@ -243,8 +302,10 @@ class _SendReviewScreenState extends ConsumerState<SendReviewScreen> {
                         )
                       : const Icon(Symbols.send_rounded, size: 20),
                   label: Text(
-                    'Send ${photos.length} photo${photos.length == 1 ? '' : 's'} '
-                    'to ${targets.length} recipient${targets.length == 1 ? '' : 's'}',
+                    oversized.isNotEmpty
+                        ? 'Remove oversized files to continue'
+                        : 'Send ${files.length} file${files.length == 1 ? '' : 's'} '
+                            'to ${targets.length} recipient${targets.length == 1 ? '' : 's'}',
                   ),
                   style: FilledButton.styleFrom(
                     minimumSize: const Size.fromHeight(48),
@@ -255,24 +316,88 @@ class _SendReviewScreenState extends ConsumerState<SendReviewScreen> {
     );
   }
 
-  String _messageCountLabel(int photoCount, int targetCount) {
+  String _messageCountLabel(int mediaCount, int docCount, int targetCount) {
     if (_mode == SendMode.individual) {
-      return '${photoCount * targetCount} (one per photo)';
+      final total = (mediaCount + docCount) * targetCount;
+      return '$total (one per file)';
     }
     final albums =
-        (photoCount + SendSessionConfig.albumMax - 1) ~/ SendSessionConfig.albumMax;
-    return '${albums * targetCount} (albums of up to 10)';
+        (mediaCount + SendSessionConfig.albumMax - 1) ~/ SendSessionConfig.albumMax;
+    return '${albums * targetCount + docCount * targetCount} '
+        '(albums of up to 10 + documents)';
   }
 
-  String _estimate(int photoCount, int targetCount) {
-    // Rough estimate: 3 s per API batch + configured pacing.
+  String _estimate(int mediaCount, int docCount, int targetCount) {
+    // Rough estimate: 3 s per API batch + configured pacing. Documents and
+    // videos upload slower; weight them ~2x a photo batch.
     final batches = _mode == SendMode.individual
-        ? photoCount
-        : (photoCount + SendSessionConfig.albumMax - 1) ~/ SendSessionConfig.albumMax;
+        ? mediaCount + docCount * 2
+        : ((mediaCount + SendSessionConfig.albumMax - 1) ~/
+                SendSessionConfig.albumMax) +
+            docCount * 2;
     final perTarget = batches * (3 + _delaySeconds);
     final seconds = (perTarget * targetCount).round();
     if (seconds < 60) return 'about $seconds s';
     return 'about ${(seconds / 60).ceil()} min';
+  }
+}
+
+class _OversizedWarning extends StatelessWidget {
+  const _OversizedWarning({required this.files, required this.bytesOf});
+
+  final List<PendingFile> files;
+  final int Function(PendingFile) bytesOf;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(AppDimens.s16),
+      decoration: BoxDecoration(
+        color: scheme.errorContainer,
+        borderRadius: BorderRadius.circular(AppDimens.radiusLg),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Symbols.error_rounded, size: 20, color: scheme.onErrorContainer),
+              const SizedBox(width: AppDimens.s8),
+              Expanded(
+                child: Text(
+                  'Files too large for Telegram bots',
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    color: scheme.onErrorContainer,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppDimens.s8),
+          for (final file in files)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 2),
+              child: Text(
+                '${file.path.split('/').last} — ${formatBytes(bytesOf(file))} '
+                '(max ${formatBytes(file.kind.maxBytes)})',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: scheme.onErrorContainer,
+                ),
+              ),
+            ),
+          const SizedBox(height: AppDimens.s4),
+          Text(
+            'Remove these files on the previous screen, or compress them '
+            'first. Photos are compressed automatically.',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: scheme.onErrorContainer,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 

@@ -1,7 +1,7 @@
 name: telegram_bulk_sender
-description: "Bulk image sender for Telegram bots — send albums or single photos to multiple chats with progress, retry and rate limiting."
+description: "Bulk sender for Telegram bots — send photos, videos and documents to multiple chats with progress, retry and rate limiting."
 publish_to: "none"
-version: 1.0.0+1
+version: 1.1.0+1
 
 environment:
   sdk: ^3.9.0
@@ -16,8 +16,9 @@ dependencies:
   go_router: ^14.8.1
   # Networking (Telegram Bot API + GitHub Releases)
   dio: ^5.7.0
-  # Media
+  # Media (photos via system Photo Picker; videos + documents via SAF picker)
   image_picker: ^1.1.2
+  file_picker: ^11.0.3
   flutter_image_compress: ^2.3.0
   # Storage
   flutter_secure_storage: ^9.2.4

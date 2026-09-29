@@ -3,23 +3,25 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_symbols_icons/symbols.dart';
 
+import '../../core/design_system/app_theme.dart';
 import '../../core/network/telegram_exceptions.dart';
 import '../../core/providers.dart';
-import '../../core/design_system/app_theme.dart';
-import '../common/widgets.dart';
 
-/// First screen: connect the bot by validating a Telegram Bot API token.
-class TokenOnboardingScreen extends ConsumerStatefulWidget {
-  const TokenOnboardingScreen({super.key});
+/// Reconnect the bot from Settings: enter a (new) token, it is validated
+/// against the real Telegram API (getMe) and replaces the stored one.
+///
+/// Use this when the bot token was regenerated in @BotFather, when the app
+/// reports "Invalid bot token", or when switching to a different bot.
+class ReconnectTokenScreen extends ConsumerStatefulWidget {
+  const ReconnectTokenScreen({super.key});
 
   @override
-  ConsumerState<TokenOnboardingScreen> createState() =>
-      _TokenOnboardingScreenState();
+  ConsumerState<ReconnectTokenScreen> createState() =>
+      _ReconnectTokenScreenState();
 }
 
-class _TokenOnboardingScreenState extends ConsumerState<TokenOnboardingScreen> {
+class _ReconnectTokenScreenState extends ConsumerState<ReconnectTokenScreen> {
   final _controller = TextEditingController();
-  final _focus = FocusNode();
   bool _obscured = true;
   bool _validating = false;
   String? _error;
@@ -28,13 +30,13 @@ class _TokenOnboardingScreenState extends ConsumerState<TokenOnboardingScreen> {
   @override
   void dispose() {
     _controller.dispose();
-    _focus.dispose();
     super.dispose();
   }
 
-  Future<void> _connect() async {
-    final token = _controller.text.trim();
-    if (token.isEmpty) {
+  Future<void> _reconnect() async {
+    if (_validating) return;
+    final raw = _controller.text;
+    if (raw.trim().isEmpty) {
       setState(() => _error = 'Enter a bot token to continue.');
       return;
     }
@@ -43,10 +45,16 @@ class _TokenOnboardingScreenState extends ConsumerState<TokenOnboardingScreen> {
       _error = null;
     });
     try {
-      final bot =
-          await ref.read(botSessionProvider.notifier).connect(token);
+      final bot = await ref.read(botSessionProvider.notifier).connect(raw);
       if (!mounted) return;
       setState(() => _connectedAs = bot.mention);
+      ref.invalidate(botUsernameProvider);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Reconnected as ${bot.mention}')),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 600));
+      if (!mounted) return;
+      context.go('/');
     } on TelegramApiException catch (e) {
       if (!mounted) return;
       setState(() => _error = e.friendlyMessage);
@@ -55,14 +63,10 @@ class _TokenOnboardingScreenState extends ConsumerState<TokenOnboardingScreen> {
     }
   }
 
-  void _continue() {
-    context.push('/onboarding/permissions');
-  }
-
   void _showHelp() {
     showModalBottomSheet<void>(
       context: context,
-      builder: (context) => const _TokenHelpSheet(),
+      builder: (context) => const _ReconnectHelpSheet(),
     );
   }
 
@@ -72,6 +76,7 @@ class _TokenOnboardingScreenState extends ConsumerState<TokenOnboardingScreen> {
     final scheme = theme.colorScheme;
 
     return Scaffold(
+      appBar: AppBar(title: const Text('Reconnect token')),
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
@@ -81,37 +86,32 @@ class _TokenOnboardingScreenState extends ConsumerState<TokenOnboardingScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const SizedBox(height: 24),
-                  const Center(child: AppMark()),
-                  const SizedBox(height: 24),
                   Text(
-                    'Bulk Sender for Telegram',
-                    textAlign: TextAlign.center,
+                    'Enter your bot token',
                     style: theme.textTheme.headlineSmall,
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Send albums of photos, videos and documents to your '
-                    'chats and channels in one go. Connect your bot to get '
-                    'started.',
-                    textAlign: TextAlign.center,
+                    'If @BotFather regenerated your token, or the app shows '
+                    '"Invalid bot token", paste the current token here. It is '
+                    'validated against Telegram and stored encrypted on this '
+                    'device.',
                     style: theme.textTheme.bodyMedium?.copyWith(
                       color: scheme.onSurfaceVariant,
                     ),
                   ),
-                  const SizedBox(height: 32),
+                  const SizedBox(height: 24),
                   TextField(
                     controller: _controller,
-                    focusNode: _focus,
                     obscureText: _obscured,
-                    autofocus: false,
                     autofillHints: const [AutofillHints.password],
                     textInputAction: TextInputAction.done,
-                    onSubmitted: (_) => _connect(),
+                    onSubmitted: (_) => _reconnect(),
                     decoration: InputDecoration(
-                      labelText: 'Bot token',
+                      labelText: 'New bot token',
                       hintText: '123456789:AA…',
-                      prefixIcon: const Icon(Symbols.key_rounded, size: 20),
+                      prefixIcon:
+                          const Icon(Symbols.key_rounded, size: 20),
                       suffixIcon: IconButton(
                         icon: Icon(
                           _obscured
@@ -130,7 +130,7 @@ class _TokenOnboardingScreenState extends ConsumerState<TokenOnboardingScreen> {
                     child: TextButton.icon(
                       onPressed: _showHelp,
                       icon: const Icon(Symbols.help_rounded, size: 18),
-                      label: const Text('How do I get a token?'),
+                      label: const Text('Token not accepted?'),
                     ),
                   ),
                   if (_error != null) ...[
@@ -142,31 +142,29 @@ class _TokenOnboardingScreenState extends ConsumerState<TokenOnboardingScreen> {
                     _ConnectedCard(handle: _connectedAs!),
                   ],
                   const SizedBox(height: 24),
-                  FilledButton(
-                    onPressed: _connectedAs != null
-                        ? _continue
-                        : (_validating ? null : _connect),
+                  FilledButton.icon(
+                    onPressed: _validating ? null : _reconnect,
                     style: FilledButton.styleFrom(
                       minimumSize: const Size.fromHeight(48),
                     ),
-                    child: _validating
+                    icon: _validating
                         ? const SizedBox(
                             width: 20,
                             height: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2),
+                            child:
+                                CircularProgressIndicator(strokeWidth: 2),
                           )
-                        : Text(
-                            _connectedAs != null ? 'Continue' : 'Connect bot',
-                          ),
+                        : const Icon(Symbols.sync_rounded, size: 20),
+                    label: Text(
+                        _validating ? 'Checking token…' : 'Reconnect token'),
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 12),
                   Text(
-                    'Your token is stored encrypted on this device only and '
-                    'is never sent anywhere except api.telegram.org.',
+                    'Recipients and history are kept. The old token is '
+                    'replaced as soon as the new one is verified.',
                     textAlign: TextAlign.center,
                     style: theme.textTheme.bodySmall,
                   ),
-                  const SizedBox(height: 24),
                 ],
               ),
             ),
@@ -245,30 +243,33 @@ class _ConnectedCard extends StatelessWidget {
   }
 }
 
-class _TokenHelpSheet extends StatelessWidget {
-  const _TokenHelpSheet();
+class _ReconnectHelpSheet extends StatelessWidget {
+  const _ReconnectHelpSheet();
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final steps = <(String, String)>[
+    final tips = <(String, String)>[
       (
-        'Open @BotFather in Telegram',
-        "BotFather is Telegram's official bot for creating and managing bots.",
+        'Copy the FULL token',
+        'A token is one line: a number, a colon, then a long secret — '
+            '123456789:AAH3xQ…  Select the whole line, including the part '
+            'after the colon.',
       ),
       (
-        'Send /newbot and follow the prompts',
-        'Choose a display name and a username ending in "bot".',
+        'Paste text, not a screenshot',
+        'The token must be copied as text. The app also cleans up labels '
+            'like "Token:" and stray spaces automatically.',
       ),
       (
-        'Copy the token',
-        'BotFather replies with a token like 123456789:AAH3x… Paste it here. '
-            'The app cleans up labels, spaces and stray characters '
-            'automatically.',
+        'Token regenerated?',
+        'If you used /revoke in @BotFather, the old token stops working '
+            'immediately — generate a new one and reconnect here.',
       ),
       (
-        'Add the bot to your chat',
-        'For groups/channels, add the bot as an admin so it can post photos.',
+        'Still failing?',
+        'Check your internet connection. If Telegram is unreachable the app '
+            'cannot verify the token.',
       ),
     ];
     return SafeArea(
@@ -278,22 +279,16 @@ class _TokenHelpSheet extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Get a bot token', style: theme.textTheme.titleLarge),
+            Text('Token not accepted?', style: theme.textTheme.titleLarge),
             const SizedBox(height: 16),
-            for (final (i, (title, body)) in steps.indexed) ...[
+            for (final (title, body) in tips) ...[
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  CircleAvatar(
-                    radius: 12,
-                    backgroundColor: theme.colorScheme.primaryContainer,
-                    child: Text(
-                      '${i + 1}',
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: theme.colorScheme.onPrimaryContainer,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
+                  Icon(
+                    Symbols.check_circle_rounded,
+                    size: 18,
+                    color: theme.colorScheme.primary,
                   ),
                   const SizedBox(width: 12),
                   Expanded(
@@ -308,21 +303,8 @@ class _TokenHelpSheet extends StatelessWidget {
                   ),
                 ],
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 14),
             ],
-            const Divider(height: 32),
-            Text(
-              'Seeing "Invalid bot token"?',
-              style: theme.textTheme.titleSmall,
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Make sure the full token is selected — including the part '
-                  'after the colon. If you regenerated it with /revoke in '
-                  '@BotFather, the old token stops working: generate a new '
-                  'one and reconnect via Settings → Reconnect token.',
-              style: theme.textTheme.bodySmall,
-            ),
           ],
         ),
       ),

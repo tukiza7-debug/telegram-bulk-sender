@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'background/send_task.dart';
 import 'background/update_check_service.dart';
 import 'constants.dart';
+import 'network/bot_token.dart';
 import 'network/telegram_api_client.dart';
 import 'network/telegram_exceptions.dart';
 import 'network/telegram_models.dart';
@@ -151,13 +152,24 @@ class BotSessionController extends Notifier<String?> {
     return TelegramApiClient(token);
   }
 
-  Future<BotUser> connect(String token) async {
-    final api = TelegramApiClient(token.trim());
+  Future<BotUser> connect(String rawToken) async {
+    // Real-token fix: clean the paste BEFORE it ever reaches the network.
+    // Tokens copied out of BotFather messages, URLs or password managers
+    // often carry labels, backticks, quotes, zero-width characters or
+    // internal whitespace that used to cause spurious 401s.
+    final token = BotTokenSanitizer.normalize(rawToken);
+    if (token == null || !BotTokenSanitizer.mightBeToken(token)) {
+      throw TelegramApiException(
+        kind: TelegramErrorKind.badRequest,
+        description: 'NOT_A_TOKEN',
+      );
+    }
+    final api = TelegramApiClient(token);
     final bot = await api.getMe();
-    await ref.read(tokenStoreProvider).write(token.trim());
+    await ref.read(tokenStoreProvider).write(token);
     final prefs = ref.read(sharedPreferencesProvider);
     await prefs.setString(AppConstants.botUsernameKey, bot.username);
-    state = token.trim();
+    state = token;
     api.dispose();
     return bot;
   }
@@ -179,17 +191,32 @@ final botUsernameProvider = FutureProvider<String>((ref) async {
 });
 
 // ---------------------------------------------------------------------------
-// Pending photos
+// Pending files (photos, videos, documents)
 // ---------------------------------------------------------------------------
 
-class PendingPhotosController extends Notifier<List<String>> {
-  @override
-  List<String> build() => const [];
+/// One file queued for sending. [kind] decides the Bot API method and the
+/// size limit applied later by the engine.
+class PendingFile {
+  const PendingFile({required this.path, required this.kind});
 
-  void addAll(List<String> paths) {
+  final String path;
+  final SendKind kind;
+
+  @override
+  bool operator ==(Object other) => other is PendingFile && other.path == path;
+
+  @override
+  int get hashCode => path.hashCode;
+}
+
+class PendingFilesController extends Notifier<List<PendingFile>> {
+  @override
+  List<PendingFile> build() => const [];
+
+  void addAll(List<PendingFile> files) {
     final merged = [...state];
-    for (final path in paths) {
-      if (!merged.contains(path)) merged.add(path);
+    for (final file in files) {
+      if (!merged.any((f) => f.path == file.path)) merged.add(file);
     }
     state = merged;
   }
@@ -210,9 +237,9 @@ class PendingPhotosController extends Notifier<List<String>> {
   void clear() => state = const [];
 }
 
-final pendingPhotosProvider =
-    NotifierProvider<PendingPhotosController, List<String>>(
-  PendingPhotosController.new,
+final pendingFilesProvider =
+    NotifierProvider<PendingFilesController, List<PendingFile>>(
+  PendingFilesController.new,
 );
 
 // ---------------------------------------------------------------------------
@@ -296,7 +323,7 @@ class SendController extends Notifier<SendUiState> {
     );
     final result = await FlutterForegroundTask.startService(
       serviceId: 42,
-      notificationTitle: 'Sending photos…',
+      notificationTitle: 'Sending files…',
       notificationText: 'Starting bulk send',
       notificationButtons: const [
         NotificationButton(id: 'pause', text: 'Pause'),
@@ -381,7 +408,7 @@ class SendController extends Notifier<SendUiState> {
     state = const SendUiState();
   }
 
-  /// Builds a retry session from the failed (photo, recipient) pairs of the
+  /// Builds a retry session from the failed (file, recipient) pairs of the
   /// last snapshot — only what failed is re-sent, to the same recipients.
   SendSessionConfig? buildRetryConfig() {
     final snapshot = state.snapshot;
@@ -406,6 +433,7 @@ class SendController extends Notifier<SendUiState> {
           targetIndex: index,
           path: item.path,
           photoIndex: item.photoIndex,
+          kind: item.kind,
         ),
       );
     }

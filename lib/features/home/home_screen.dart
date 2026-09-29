@@ -18,7 +18,7 @@ class HomeScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final targets = ref.watch(targetsProvider);
-    final photos = ref.watch(pendingPhotosProvider);
+    final files = ref.watch(pendingFilesProvider);
     final botUsername = ref.watch(botUsernameProvider);
     final update = ref.watch(updateProvider);
 
@@ -55,12 +55,12 @@ class HomeScreen extends ConsumerWidget {
       body: hasToken
           ? _HomeBody(
               targets: targets,
-              photoCount: photos.length,
+              fileCount: files.length,
               botUsername: botUsername.value ?? '',
               update: update,
             )
           : const _NoBotState(),
-      bottomNavigationBar: hasToken ? _SendFooter(photoCount: photos.length, targetCount: targets.length) : null,
+      bottomNavigationBar: hasToken ? _SendFooter(fileCount: files.length, targetCount: targets.length) : null,
     );
   }
 }
@@ -68,13 +68,13 @@ class HomeScreen extends ConsumerWidget {
 class _HomeBody extends ConsumerWidget {
   const _HomeBody({
     required this.targets,
-    required this.photoCount,
+    required this.fileCount,
     required this.botUsername,
     required this.update,
   });
 
   final List<TgChat> targets;
-  final int photoCount;
+  final int fileCount;
   final String botUsername;
   final UpdateState update;
 
@@ -124,11 +124,11 @@ class _HomeBody extends ConsumerWidget {
         ],
         const SizedBox(height: AppDimens.s8),
         Section(
-          title: 'Photos',
-          subtitle: photoCount == 0
+          title: 'Files',
+          subtitle: fileCount == 0
               ? 'Nothing selected yet.'
-              : '$photoCount photo${photoCount == 1 ? '' : 's'} ready to send.',
-          child: photoCount == 0
+              : '$fileCount file${fileCount == 1 ? '' : 's'} ready to send.',
+          child: fileCount == 0
               ? Container(
                   padding: const EdgeInsets.all(AppDimens.s16),
                   decoration: BoxDecoration(
@@ -145,8 +145,9 @@ class _HomeBody extends ConsumerWidget {
                       const SizedBox(width: AppDimens.s12),
                       Expanded(
                         child: Text(
-                          'Selected photos will appear here. Use “Choose '
-                          'photos” below to pick from your device.',
+                          'Photos, videos and documents you select will '
+                          'appear here. Use “Choose files” below to pick '
+                          'from your device.',
                           style: theme.textTheme.bodySmall,
                         ),
                       ),
@@ -336,9 +337,9 @@ class _TargetRow extends ConsumerWidget {
 }
 
 class _SendFooter extends ConsumerWidget {
-  const _SendFooter({required this.photoCount, required this.targetCount});
+  const _SendFooter({required this.fileCount, required this.targetCount});
 
-  final int photoCount;
+  final int fileCount;
   final int targetCount;
 
   @override
@@ -360,7 +361,7 @@ class _SendFooter extends ConsumerWidget {
               onPressed: ready ? () => context.push('/picker') : null,
               icon: const Icon(Symbols.photo_library_rounded, size: 20),
               label: Text(
-                photoCount == 0 ? 'Choose photos' : 'Review photos ($photoCount)',
+                fileCount == 0 ? 'Choose files' : 'Review files ($fileCount)',
               ),
               style: FilledButton.styleFrom(
                 minimumSize: const Size.fromHeight(48),
@@ -388,7 +389,8 @@ class _NoBotState extends StatelessWidget {
     return EmptyState(
       icon: Symbols.key_rounded,
       title: 'Bot not connected',
-      message: 'Connect your Telegram bot to start sending photos.',
+      message: 'Connect your Telegram bot to start sending photos, videos '
+          'and documents.',
       action: FilledButton(
         onPressed: () => context.push('/onboarding'),
         child: const Text('Connect bot'),
