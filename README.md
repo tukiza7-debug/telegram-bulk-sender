@@ -244,6 +244,19 @@ key; CI builds always use the real release keystore (below).
 
 ## Troubleshooting
 
+- **"Telegram rejected this token" repeated on every paste** — three known
+  causes, all handled since v1.2.3: (1) a selection copy across the
+  visually wrapped token keeps soft line breaks *inside* the secret — the
+  app now re-joins the wrapped fragments before validating; (2) notes apps
+  reformat copies with smart dashes/quotes — normalized; (3) the token was
+  regenerated with `/revoke` in @BotFather and an older message was copied
+  — every `/revoke` kills all older tokens, so copy from the **latest**
+  message only. To tell a mangled paste from a dead token, open **Details**
+  under the error: the `Tried token:` line shows the masked fingerprint
+  (e.g. `123456789:AAH3…wk9`) of what the app actually received — if it
+  differs from what @BotFather shows, copy the token again. Pasting a bot
+  link (`t.me/…`) or `@username` now shows the actionable "that doesn't
+  look like a bot token" hint instead of a doomed 401.
 - **"Invalid bot token"** — make sure the whole token (including the part
   after the colon) was copied. The app cleans up labels, spaces and stray
   characters automatically, so a real token should validate on the first

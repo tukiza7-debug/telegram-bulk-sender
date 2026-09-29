@@ -383,3 +383,50 @@ verified token exists.
 
 **Verdict: audits 1–5 PASS, audit 6 not executable on this machine —
 cleared to push and tag `v1.2.2` with that caveat stated.**
+
+## Release audit — v1.2.3 (token-rejection round)
+
+Trigger: user reported "Telegram rejected this token" on 4+ pastes with 4
+different (freshly generated) tokens.
+
+## Audit 1 — Root causes — FIXED
+1. **Wrapped-copy truncation (app bug)**: selection copies across the
+   visually wrapped BotFather code block keep soft line breaks inside the
+   secret; the old embedded extraction truncated the token at the break
+   (secret >= 20 chars) and Telegram then 401'd every paste of a valid
+   token. Fix: word-join recovery preserves whitespace boundaries —
+   adjacent-word runs (<= 4) that join into a complete-looking token
+   (secret 20..36, exact-35 preferred) are used; labels can never fuse
+   onto the secret. Covered by 3 new sanitizer tests.
+2. **Notes-app reformatting**: smart dashes (– — −) and curly quotes are
+   normalized to ASCII before matching. 1 new test.
+3. **Doomed pastes**: t.me links / @usernames / colon-less residues now
+   surface the actionable NOT_A_TOKEN hint instead of a guaranteed 401.
+   1 new test (4 assertions).
+
+## Audit 2 — Diagnosability — ADDED
+- `TelegramApiException.triedTokenMask`: `connect()` failures now carry the
+  masked fingerprint (`id:head…tail`) of the token actually sent; rendered
+  first in the Details box as `Tried token: … (compare with @BotFather)`.
+  Lets a user stuck in a rejection loop distinguish truncated pastes from
+  genuinely revoked tokens. 1 new session test; masks verified to leak no
+  usable secret (existing mask tests still green).
+
+## Audit 3 — Regression safety — PASS
+- flutter analyze: 0 issues. flutter test: 95/95 (was 90).
+- All pre-existing sanitizer behaviors preserved (labeled replies, URLs,
+  backticks, zero-width chars, fullwidth colons, legacy short secrets via
+  the loose path, last-resort passthrough).
+
+## Audit 4 — Secrets — PASS
+- No token material added to tests or docs; all examples are the same
+  dummy `123456789:AAHdqTcv…` family used since v1.2.0. The user's real
+  token never touched the repo.
+
+## Audit 5 — Device coverage — NOT RUN (no device)
+- Clipboard wrap behavior on real Telegram Android clients, keyboard
+  autofill interactions, and the actual 401 flow are verified at code and
+  test level only.
+
+**Verdict: audits 1-4 PASS, audit 5 not executable on this machine —
+cleared to push and tag `v1.2.3`.**
