@@ -22,10 +22,7 @@ Future<void> main() async {
   await NotificationService.instance.init();
 
   // Background update check (periodic, network-constrained).
-  await Workmanager().initialize(
-    callbackDispatcher,
-    isInDebugMode: false,
-  );
+  await Workmanager().initialize(callbackDispatcher);
   await registerPeriodicUpdateCheck();
 
   // Foreground service for bulk sending (type: dataSync, declared in manifest).

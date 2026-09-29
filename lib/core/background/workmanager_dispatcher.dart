@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 import 'package:workmanager/workmanager.dart';
 
 import '../constants.dart';
@@ -25,9 +23,6 @@ Future<void> registerPeriodicUpdateCheck() async {
     AppConstants.updateCheckTaskName,
     frequency: const Duration(hours: 6),
     constraints: Constraints(networkType: NetworkType.connected),
-    existingWorkPolicy: ExistingWorkPolicy.keep,
+    existingWorkPolicy: ExistingPeriodicWorkPolicy.keep,
   );
 }
-
-/// Encodes a [SendSessionConfig] for the foreground task isolate.
-String encodeTaskPayload(Map<String, dynamic> config) => jsonEncode(config);
