@@ -372,15 +372,17 @@ class _TokenHelpSheet extends StatelessWidget {
             ],
             const Divider(height: 32),
             Text(
-              'Seeing "Invalid bot token"?',
+              'Seeing "Telegram rejected this token"?',
               style: theme.textTheme.titleSmall,
             ),
             const SizedBox(height: 4),
             Text(
-              'Make sure the full token is selected — including the part '
-                  'after the colon. If you regenerated it with /revoke in '
-                  '@BotFather, the old token stops working: generate a new '
-                  'one and reconnect via Settings → Reconnect token.',
+              'Make sure the FULL token is selected — including the part '
+                  'after the colon. Every /revoke in @BotFather kills all '
+                  'older tokens, so copy from the LATEST message only. Open '
+                  'Details under the error and compare the "Tried token" '
+                  'line with what @BotFather shows: if the two differ, the '
+                  'copy was truncated — select and copy it again.',
               style: theme.textTheme.bodySmall,
             ),
           ],

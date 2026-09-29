@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:telegram_bulk_sender/core/constants.dart';
+import 'package:telegram_bulk_sender/core/network/bot_token.dart';
 import 'package:telegram_bulk_sender/core/network/telegram_api_client.dart';
 import 'package:telegram_bulk_sender/core/network/telegram_exceptions.dart';
 import 'package:telegram_bulk_sender/core/network/telegram_models.dart';
@@ -387,6 +388,40 @@ void main() {
       expect(api.getMeCalls, 0);
       expect(store.value, isNull);
       expect(container.read(botSessionProvider), isNull);
+    });
+
+    test('401 connect failure carries the masked token for the Details box',
+        () async {
+      // A user stuck in a "rejected" loop must be able to compare the
+      // token the app actually sent with what @BotFather shows.
+      const raw = '3333:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsawk';
+      final container = await _container(
+        store: _MemTokenStore(),
+        apiFor: (_) => _FakeApi(() async => throw _unauthorized()),
+      );
+      final notifier = container.read(botSessionProvider.notifier);
+
+      await expectLater(
+        notifier.connect(raw),
+        throwsA(
+          isA<TelegramApiException>()
+              .having(
+                (e) => e.kind,
+                'kind',
+                TelegramErrorKind.unauthorized,
+              )
+              .having(
+                (e) => e.triedTokenMask,
+                'triedTokenMask',
+                BotTokenSanitizer.mask(raw),
+              )
+              .having(
+                (e) => e.technicalDetails,
+                'details',
+                contains('Tried token: ${BotTokenSanitizer.mask(raw)}'),
+              ),
+        ),
+      );
     });
   });
 }

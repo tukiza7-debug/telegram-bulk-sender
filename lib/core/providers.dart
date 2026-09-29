@@ -297,13 +297,17 @@ class BotSessionController extends Notifier<BotSession?> {
       bot = await api.getMe();
     } on TelegramApiException catch (e) {
       // Re-throw with the token redacted so the screens' "Details" section
-      // can show the raw technical info safely.
+      // can show the raw technical info safely, plus the MASKED token that
+      // was actually tried — the only way a user stuck in a
+      // "rejected, rejected, rejected…" loop can tell a truncated or
+      // mangled paste apart from a genuinely revoked token.
       throw TelegramApiException(
         kind: e.kind,
         statusCode: e.statusCode,
         errorCode: e.errorCode,
         description: api.sanitize(e.description),
         retryAfter: e.retryAfter,
+        triedTokenMask: BotTokenSanitizer.mask(token),
       );
     } finally {
       // The client must be closed on BOTH the success and error paths —

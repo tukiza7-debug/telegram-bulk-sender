@@ -6,6 +6,7 @@ class TelegramApiException implements Exception {
     this.errorCode,
     this.description = '',
     this.retryAfter,
+    this.triedTokenMask,
   });
 
   final TelegramErrorKind kind;
@@ -17,6 +18,13 @@ class TelegramApiException implements Exception {
 
   /// Seconds to wait when the server responded with HTTP 429.
   final int? retryAfter;
+
+  /// Masked form (`1234567:AAH3…wk9`) of the token that was actually sent
+  /// to Telegram, set by `connect()` on a failed validation. Shown in the
+  /// "Details" section so the user can compare it with the token
+  /// @BotFather displays and spot truncated or mangled pastes. Never
+  /// contains enough of the secret to be usable.
+  final String? triedTokenMask;
 
   bool get isRateLimited => kind == TelegramErrorKind.rateLimited;
   bool get isTransient =>
@@ -68,8 +76,10 @@ class TelegramApiException implements Exception {
   String get friendlyMessageOnboarding {
     switch (kind) {
       case TelegramErrorKind.unauthorized:
-        return 'Telegram rejected this token. Copy it again from @BotFather '
-            '(/mybots → your bot → API Token), or generate a new one.';
+        return 'Telegram rejected this token. Copy the FULL token from the '
+            "bot's LATEST @BotFather message (/mybots → your bot → API "
+            'Token) — after /revoke every older token is dead. Open '
+            'Details to compare the token the app actually received.';
       case TelegramErrorKind.chatNotFound:
       case TelegramErrorKind.forbidden:
       case TelegramErrorKind.badRequest:
@@ -90,6 +100,8 @@ class TelegramApiException implements Exception {
   /// contains the token (callers pass descriptions through `sanitize()`).
   String get technicalDetails {
     final parts = <String>[
+      if (triedTokenMask != null)
+        'Tried token: $triedTokenMask (compare with @BotFather)',
       if (statusCode != null) 'HTTP status: $statusCode',
       if (errorCode != null) 'Telegram error_code: $errorCode',
       if (description.isNotEmpty) 'Description: ${_trim(description)}',

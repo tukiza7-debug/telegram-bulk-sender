@@ -323,7 +323,15 @@ class _ReconnectHelpSheet extends StatelessWidget {
       (
         'Token regenerated?',
         'If you used /revoke in @BotFather, the old token stops working '
-            'immediately — generate a new one and reconnect here.',
+            'immediately — generate a new one and reconnect here. Copy '
+            'from the LATEST message only.',
+      ),
+      (
+        'Compare the fingerprint',
+        'Open Details under the error: the "Tried token" line shows what '
+            'the app received (e.g. 123456789:AAH3…wk9). If it differs '
+            'from what @BotFather shows, the copy was truncated or '
+            'mangled — select and copy the token again.',
       ),
       (
         'Still failing?',
