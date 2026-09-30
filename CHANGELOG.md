@@ -1,5 +1,58 @@
 # Changelog
 
+## 2.0.0 — production CLI + importable library (`cli/`)
+
+The major update of the product: a production-grade command-line tool and
+importable Python library that bulk-sends images through the Telegram Bot
+API to explicitly allowlisted, consent-based recipients. The Android app is
+untouched and continues its own 1.x line; the CLI lives in `cli/` with its
+own CI workflow (`.github/workflows/cli.yml`).
+
+- **Three delivery modes over ONE pipeline** (no forked logic):
+  `tbis folder` (deterministic natural-order queue, optional recursion and
+  globs), `tbis manifest` (strictly sequential CSV/JSON manifest, order
+  preserved), `tbis single` (one image, for testing a setup).
+- **Dry-run first**: `--dry-run` prints the complete plan (file → recipient
+  → caption → estimated API calls) and performs zero network calls; it does
+  not even require a token.
+- **Validation before the queue**: JPEG/PNG/WebP detection by magic bytes
+  (not extension), truncation detection (including the JPEG EOI marker),
+  zero-byte and oversize rejection with named reasons. The official
+  sendPhoto limits are encoded as documented defaults: 10 MB,
+  width+height ≤ 10000, aspect ratio ≤ 20
+  (https://core.telegram.org/bots/api#sendphoto, fetched 2026-09-30).
+  Optional `--resize-if-over-limit` and `--normalize-exif` upload
+  derivatives written to a temp dir; originals are never modified.
+- **Reliability**: idempotent checkpoint store (SHA-256 + chat_id →
+  message_id, atomic writes with fsync) — interrupted runs resume without
+  resending; global + per-recipient token-bucket pacing; HTTP 429 waits the
+  server-requested `retry_after` plus jitter; TRANSIENT (network/5xx)
+  retries with exponential backoff up to `--max-attempts`; PERMANENT
+  (400/403/404) is recorded without retry; FATAL (401) aborts immediately.
+  Timeouts on every network call.
+- **Safety rails**: explicit recipient allowlist (no discovery feature by
+  design), per-recipient daily cap, optional quiet-hours window,
+  kill-switch that halts a run when the failure rate over a rolling window
+  exceeds the configured limit, graceful SIGINT/SIGTERM shutdown that
+  finishes the in-flight send, flushes state and exits non-zero.
+- **Reporting**: JSON Lines event log plus machine-readable `report.json`
+  and `report.csv` per run; end-of-run summary built from real counters
+  only (no estimated ETA). Exit codes: 0 all sent, 2 partial failure,
+  3 fatal, 4 validation error.
+- **Truthful errors**: network failures report network failures — never
+  "token rejected"; `getMe` preflight fails fast on a bad token.
+- **Engineering gates enforced in CI**: ruff lint + format, mypy strict
+  (zero issues), 154 hermetic tests (no real network; a fake Bot API server
+  runs on loopback), coverage floors (80% overall; 100% on the
+  retry/backoff, rate-limiting, escaping and checkpoint modules), secret
+  scanning, and a README↔parser contract test.
+- **Dependencies**: PyYAML (config file parsing) and Pillow (image
+  verification, dimensions, EXIF, resizing) only; HTTP uses the stdlib
+  urllib with streaming multipart uploads.
+
+Docs: `cli/README.md`, `cli/config.example.yaml`, `cli/docs/ARCHITECTURE.md`,
+`cli/docs/SMOKE.md`, `cli/docs/MIGRATION.md`, `cli/docs/TEST_REPORT.md`.
+
 ## 1.2.4 — paste-proof token ingestion & truthful error taxonomy
 
 The "Telegram rejected this token" loop (valid tokens rejected on every

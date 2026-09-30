@@ -13,6 +13,36 @@ to 10 photos/videos per message) or as individual files — with a live
 progress screen, pause/cancel, automatic HTTP 429 handling, and sending that
 continues in the background via a foreground service.
 
+## Telegram Bulk Image Sender (CLI / server)
+
+This repository contains two components:
+
+1. **Android app** (this README's main subject) - bulk album sending from a
+   phone, built with Flutter.
+2. **CLI + Python library** (`cli/`) - a production-grade command-line tool
+   that sends images in bulk through the Telegram Bot API to explicitly
+   allowlisted, consent-based recipients. It supports folder scans
+   (natural order), strictly sequential manifest runs, single-image sends,
+   `--dry-run` planning with zero network calls, checkpoint resume, rate
+   limiting with 429 flood handling, per-recipient daily caps, quiet hours,
+   a failure-rate kill switch and JSON/CSV audit reports.
+
+Start here:
+
+```bash
+cd cli
+python -m pip install -e .
+tbis folder --source-dir ./photos --dry-run --recipient news --config my.yaml
+```
+
+See `cli/README.md` (install, config, all flags, exit codes, compliance
+notice), `cli/config.example.yaml` (every option documented),
+`cli/docs/SMOKE.md` (manual test checklist against a TEST bot) and
+`cli/docs/ARCHITECTURE.md` (pipeline and module responsibilities).
+
+Only message people who opted in. You are responsible for complying with
+Telegram's Terms of Service and applicable anti-spam/privacy law.
+
 ## Screenshots
 
 Placeholders live in [`docs/screenshots/`](docs/screenshots/) and are named
