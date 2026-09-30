@@ -1,0 +1,15 @@
+#!/bin/sh
+# Pre-commit hook for the CLI component (secret scan + ruff).
+# Install once from the repository root:
+#   git config core.hooksPath cli/scripts/hooks
+# The full gate set (mypy, coverage floors) runs in CI (.github/workflows/cli.yml).
+
+echo "pre-commit: secret scan (repo)"
+python3 "$(git rev-parse --show-toplevel)/cli/scripts/secret_scan.py" "$(git rev-parse --show-toplevel)" || exit 1
+
+CHANGED_CLI=$(git diff --cached --name-only --diff-filter=ACM -- 'cli/*.py' 'cli/**/*.py' | wc -l)
+if [ "$CHANGED_CLI" -gt 0 ]; then
+    echo "pre-commit: ruff check (cli)"
+    (cd "$(git rev-parse --show-toplevel)/cli" && python3 -m ruff check .) || exit 1
+fi
+exit 0
