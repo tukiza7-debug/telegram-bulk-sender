@@ -53,3 +53,17 @@ android/app/upload-keystore.jks
 *.jks
 *.keystore
 keystore.base64
+
+# CLI (cli/) — python
+cli/.venv/
+cli/**/__pycache__/
+cli/*.egg-info/
+cli/src/*.egg-info/
+cli/.pytest_cache/
+cli/.mypy_cache/
+cli/.ruff_cache/
+cli/coverage.xml
+cli/htmlcov/
+cli/reports/
+cli/state/
+cli/.secrets/
