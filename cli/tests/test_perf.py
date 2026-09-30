@@ -45,6 +45,7 @@ def test_hashing_streams_in_chunks(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert max(chunk_sizes) <= 4096, "hashing read more than one chunk at a time"
 
 
+@pytest.mark.slow
 def test_thousand_file_dry_run_is_fast(tmp_path: Path) -> None:
     src = tmp_path / "imgs"
     src.mkdir()
