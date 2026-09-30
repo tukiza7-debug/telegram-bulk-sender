@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Callable
+from collections.abc import Callable
 
 from .config import LimitsConfig
 from .model import ChatId

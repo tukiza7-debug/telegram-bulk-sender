@@ -10,12 +10,11 @@ recorded for assertions on real behaviour (caption bytes, chat ids, order).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Union
 
 from ..model import ChatId, ParseMode
 from .base import BotUser, SentMessage, TelegramClient
 
-ScriptedOutcome = Union[SentMessage, Exception]
+ScriptedOutcome = SentMessage | Exception
 
 
 @dataclass(frozen=True)
@@ -29,7 +28,9 @@ class SendCall:
 
 @dataclass
 class FakeTelegramClient(TelegramClient):
-    bot_user: BotUser = BotUser(id=1, is_bot=True, username="test_bot")
+    bot_user: BotUser = field(
+        default_factory=lambda: BotUser(id=1, is_bot=True, username="test_bot")
+    )
     outcomes: list[ScriptedOutcome] = field(default_factory=list)
     calls: list[SendCall] = field(default_factory=list)
     get_me_calls: int = 0

@@ -21,10 +21,10 @@ import random
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Callable
 from zoneinfo import ZoneInfo
 
 from .backoff import RetryPolicy
@@ -42,8 +42,9 @@ NowFn = Callable[[], datetime]
 RNG = Callable[[], float]
 
 _ABORT_FATAL = "fatal error: the run cannot continue"
-_ABORT_KILL_SWITCH = ("kill-switch: failure rate over the configured window "
-                      "exceeded the configured limit")
+_ABORT_KILL_SWITCH = (
+    "kill-switch: failure rate over the configured window exceeded the configured limit"
+)
 _ABORT_INTERRUPT = "interrupted by stop signal"
 
 _FAILURE_STATUSES = frozenset(
@@ -108,12 +109,17 @@ class RateLimitedExecutor:
         max_workers = min(self._config.send.concurrency, max(1, len(plan)))
         unexpected: BaseException | None = None
         try:
-            with ThreadPoolExecutor(max_workers=max_workers,
-                                    thread_name_prefix="tbis-send") as pool:
+            with ThreadPoolExecutor(
+                max_workers=max_workers, thread_name_prefix="tbis-send"
+            ) as pool:
                 while pending or inflight:
                     if result.abort_reason is None and not self._stop.is_set():
-                        while (pending and len(inflight) < max_workers
-                               and result.abort_reason is None and not self._stop.is_set()):
+                        while (
+                            pending
+                            and len(inflight) < max_workers
+                            and result.abort_reason is None
+                            and not self._stop.is_set()
+                        ):
                             item = pending.popleft()
                             gate = self._gate(item, dispatched, limit)
                             if gate is not None:
@@ -124,11 +130,13 @@ class RateLimitedExecutor:
                             dispatched += 1
                     else:
                         status = self._remaining_status(result.abort_reason)
-                        note = ("not dispatched: " + (result.abort_reason or _ABORT_INTERRUPT))
+                        note = "not dispatched: " + (result.abort_reason or _ABORT_INTERRUPT)
                         while pending:
                             self._record(
                                 SendOutcome(plan=pending.popleft(), status=status, note=note),
-                                result, failure_window, window_seconds,
+                                result,
+                                failure_window,
+                                window_seconds,
                             )
 
                     if not inflight:
@@ -150,7 +158,9 @@ class RateLimitedExecutor:
                                     note=f"unexpected error, run aborted: "
                                     f"{type(exc).__name__}: {exc}",
                                 ),
-                                result, failure_window, window_seconds,
+                                result,
+                                failure_window,
+                                window_seconds,
                             )
                             result.abort_reason = (
                                 f"unexpected internal error: {type(exc).__name__}: {exc}"
@@ -181,9 +191,7 @@ class RateLimitedExecutor:
                 f"({self._config.limits.quiet_hours.timezone})",
             )
         cap = self._config.limits.daily_cap_per_recipient
-        if self._checkpoint.count_today(
-            item.recipient.chat_id, now_utc=self._now_fn()
-        ) >= cap:
+        if self._checkpoint.count_today(item.recipient.chat_id, now_utc=self._now_fn()) >= cap:
             return SendOutcome(
                 plan=item,
                 status=ResultStatus.SKIPPED_DAILY_CAP,
@@ -261,9 +269,11 @@ class RateLimitedExecutor:
                         note="run aborted: " + exc.message,
                     )
                 if exc.kind is ErrorKind.PERMANENT or attempts >= self._policy.max_attempts:
-                    status = (ResultStatus.FAILED_PERMANENT
-                              if exc.kind is ErrorKind.PERMANENT
-                              else ResultStatus.FAILED_TRANSIENT)
+                    status = (
+                        ResultStatus.FAILED_PERMANENT
+                        if exc.kind is ErrorKind.PERMANENT
+                        else ResultStatus.FAILED_TRANSIENT
+                    )
                     return SendOutcome(
                         plan=item,
                         status=status,
@@ -272,7 +282,8 @@ class RateLimitedExecutor:
                         error_description=exc.api_description or exc.message,
                         error_kind=exc.kind.name,
                         latency_ms=latency_ms,
-                        note=None if exc.kind is ErrorKind.PERMANENT
+                        note=None
+                        if exc.kind is ErrorKind.PERMANENT
                         else f"exhausted {attempts} attempts",
                     )
                 backoff = self._policy.delay_for(exc, attempts)

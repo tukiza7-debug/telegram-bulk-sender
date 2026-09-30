@@ -15,8 +15,8 @@ Deliberate engineering decisions:
 
 from __future__ import annotations
 
+import http.client
 import json
-import socket
 import uuid
 from pathlib import Path
 from typing import Any
@@ -48,8 +48,14 @@ class MultipartBody:
     stays bounded regardless of image size.
     """
 
-    def __init__(self, fields: dict[str, str], file_field: str, file_path: str,
-                 file_content_type: str, filename: str) -> None:
+    def __init__(
+        self,
+        fields: dict[str, str],
+        file_field: str,
+        file_path: str,
+        file_content_type: str,
+        filename: str,
+    ) -> None:
         self._boundary = f"tbis-{uuid.uuid4().hex}"
         self._file_path = file_path
         head = bytearray()
@@ -57,14 +63,16 @@ class MultipartBody:
             head += _part_header(self._boundary, name, filename=None, content_type=None)
             head += value.encode("utf-8")
             head += b"\r\n"
-        head += _part_header(self._boundary, file_field, filename=filename,
-                             content_type=file_content_type)
+        head += _part_header(
+            self._boundary, file_field, filename=filename, content_type=file_content_type
+        )
         self._head = bytes(head)
-        self._tail = f"\r\n--{self._boundary}--\r\n".encode("utf-8")
+        self._tail = f"\r\n--{self._boundary}--\r\n".encode()
         self._file_size = Path(file_path).stat().st_size
         self.length = len(self._head) + self._file_size + len(self._tail)
         self._file_remaining = self._file_size
-        self._file_handle = open(file_path, "rb")
+        # Opened for the lifetime of the upload body; closed in close().
+        self._file_handle = open(file_path, "rb")  # noqa: SIM115
 
     @property
     def content_type(self) -> str:
@@ -96,8 +104,9 @@ class MultipartBody:
         self._file_handle.close()
 
 
-def _part_header(boundary: str, name: str, *, filename: str | None,
-                 content_type: str | None) -> bytes:
+def _part_header(
+    boundary: str, name: str, *, filename: str | None, content_type: str | None
+) -> bytes:
     lines = [f"--{boundary}\r\n"]
     disposition = f'Content-Disposition: form-data; name="{name}"'
     if filename is not None:
@@ -138,7 +147,10 @@ class TelegramHttpClient(TelegramClient):
             payload = exc.read()
             exc.close()
             return exc.code, payload
-        except (URLError, socket.timeout, TimeoutError, ConnectionError, OSError) as exc:
+        except (URLError, TimeoutError, ConnectionError, OSError, http.client.HTTPException) as exc:
+            # Covers connect/read timeouts, dropped connections mid-upload and
+            # truncated responses. All of these are TRANSIENT: the network
+            # path failed, which is never evidence of a bad token.
             raise TransientSendError(
                 f"network failure calling {method}: {type(exc).__name__}: {exc}"
             ) from exc
@@ -166,7 +178,7 @@ class TelegramHttpClient(TelegramClient):
     ) -> SentMessage:
         source = Path(photo_path)
         send_name = filename or source.name
-        fmt = sniff_format(photo_path)
+        fmt = sniff_format(photo_path) or ""
         content_type = _FILE_CONTENT_TYPES.get(fmt, "application/octet-stream")
         fields: dict[str, str] = {"chat_id": str(chat_id)}
         if caption:

@@ -9,7 +9,7 @@ and what the executor consumes. Cross-run deduplication is applied here
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .captions import build_and_escape, check_template
@@ -17,7 +17,6 @@ from .config import Config
 from .errors import ValidationError
 from .model import (
     CaptionMode,
-    ParseMode,
     PlannedSend,
     Recipient,
     ResultStatus,
@@ -45,10 +44,12 @@ class Planner:
     NOTE_DUP_WITHIN = "duplicate within run"
     NOTE_DUP_ACROSS = "already delivered in a previous run"
 
-    def __init__(self, config: Config, checkpoint: CheckpointStore) -> None:
+    def __init__(
+        self, config: Config, checkpoint: CheckpointStore, now: datetime | None = None
+    ) -> None:
         self._config = config
         self._checkpoint = checkpoint
-        self._now = datetime.now(timezone.utc)
+        self._now = now or datetime.now(UTC)
 
     def build(
         self,
@@ -63,11 +64,13 @@ class Planner:
         result = PlanBuild()
         if caption_mode is CaptionMode.MANIFEST_COLUMN and rows is None:
             raise ValidationError(
-                ["caption-mode 'manifest-column' requires a manifest with a "
-                 f"'{caption_column}' column"]
+                [
+                    "caption-mode 'manifest-column' requires a manifest with a "
+                    f"'{caption_column}' column"
+                ]
             )
         if caption_mode is CaptionMode.MANIFEST_COLUMN and rows is not None:
-            missing = [r.row_number for r in rows if caption_column not in r.custom]
+            missing = [r.row_number for r in rows if r.caption is None]
             if missing:
                 result.warnings.append(
                     f"rows without a '{caption_column}' value get no caption: "
@@ -187,9 +190,7 @@ class Planner:
                 return image
         return None
 
-    def _recipient_for_row(
-        self, recipients: list[Recipient], row: ManifestRow
-    ) -> Recipient | None:
+    def _recipient_for_row(self, recipients: list[Recipient], row: ManifestRow) -> Recipient | None:
         for recipient in recipients:
             if recipient.name == row.recipient_ref or str(recipient.chat_id) == row.recipient_ref:
                 return recipient
@@ -203,9 +204,6 @@ class Planner:
         result: PlanBuild,
     ) -> None:
         known_images = {i.candidate.path for i in images}
-        known_recipients = {r.name for r in recipients} | {
-            str(r.chat_id) for r in recipients
-        }
         for row in rows:
             if row.resolved_path not in known_images:
                 result.warnings.append(
@@ -229,7 +227,7 @@ class Planner:
         if caption_mode is CaptionMode.NONE:
             return None
         if caption_mode is CaptionMode.MANIFEST_COLUMN:
-            raw = row.custom.get(caption_column, "")
+            raw = row.caption or ""
             if not raw:
                 return None
             return build_and_escape(
@@ -253,7 +251,7 @@ class Planner:
             )
         # PER_IMAGE in manifest mode: template may come from CLI/config; fall
         # back to the row's caption column when no template is configured.
-        template = self._config.defaults.caption or row.custom.get(caption_column, "")
+        template = self._config.defaults.caption or row.caption or ""
         if not template:
             return None
         return build_and_escape(

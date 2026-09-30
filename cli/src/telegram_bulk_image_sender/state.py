@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable
 
 from .errors import StateError
 from .model import ChatId
@@ -23,7 +23,7 @@ STATE_VERSION = 1
 class CheckpointStore:
     def __init__(self, path: str, *, now: Callable[[], datetime] | None = None) -> None:
         self._path = Path(path)
-        self._now = now or (lambda: datetime.now(timezone.utc))
+        self._now = now or (lambda: datetime.now(UTC))
         self._entries: dict[str, dict[str, object]] = {}
         self._loaded = False
 
@@ -82,7 +82,7 @@ class CheckpointStore:
         """
         self._ensure_loaded()
         current = now_utc or self._now()
-        today = current.astimezone(timezone.utc).date().isoformat()
+        today = current.astimezone(UTC).date().isoformat()
         chat_key = str(chat_id)
         return sum(
             1
@@ -101,7 +101,7 @@ class CheckpointStore:
             "key": key,
             "sha256": sha256,
             "chat": str(chat_id),
-            "chat_day": stamp.astimezone(timezone.utc).date().isoformat(),
+            "chat_day": stamp.astimezone(UTC).date().isoformat(),
             "message_id": message_id,
             "timestamp": stamp.isoformat(),
         }

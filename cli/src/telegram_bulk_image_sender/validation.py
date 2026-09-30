@@ -122,8 +122,10 @@ def build_derivative(image: ValidatedImage, config: ValidationConfig) -> Validat
     the original actually needs it. Callers must keep the returned
     derivative_path alive (the runner owns the temp dir lifecycle).
     """
-    needs_resize = image.width is not None and image.height is not None and (
-        image.width + image.height > config.max_total_dimension
+    needs_resize = (
+        image.width is not None
+        and image.height is not None
+        and (image.width + image.height > config.max_total_dimension)
     )
     needs_exif = config.normalize_exif and image.exif_orientation not in (None, 1)
     if not needs_resize and not needs_exif:
@@ -137,9 +139,9 @@ def build_derivative(image: ValidatedImage, config: ValidationConfig) -> Validat
     with Image.open(src) as img:
         work = ImageOps.exif_transpose(img) if needs_exif else img
         if needs_resize:
-            # Long edge target: fit the sum constraint while keeping ratio.
+            # Fit the configured dimension-sum limit while keeping the ratio.
             w, h = work.size
-            scale = min(1.0, MAX_DIMENSION_SUM / (w + h))
+            scale = min(1.0, config.max_total_dimension / (w + h))
             new_size = (max(1, int(w * scale)), max(1, int(h * scale)))
             work = work.resize(new_size, Image.Resampling.LANCZOS)
             notes.append(f"resized {w}x{h} -> {new_size[0]}x{new_size[1]}")

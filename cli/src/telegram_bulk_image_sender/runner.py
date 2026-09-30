@@ -16,9 +16,11 @@ import shutil
 import tempfile
 import threading
 import uuid
-from dataclasses import dataclass, replace as dataclass_replace
+from collections.abc import Callable
+from dataclasses import dataclass
+from dataclasses import replace as dataclass_replace
 from pathlib import Path
-from typing import Callable, Protocol
+from typing import Protocol
 
 from .config import Config, ValidationConfig, resolve_token
 from .discovery import order_candidates, scan_directory
@@ -28,7 +30,6 @@ from .model import (
     CaptionMode,
     ImageCandidate,
     OrderKey,
-    PlannedSend,
     Recipient,
     RunSummary,
     ValidatedImage,
@@ -131,8 +132,9 @@ def run(
 ) -> RunResult:
     """Execute one run end-to-end. Raises only TbisError subclasses."""
     if request.mode not in MODES:
-        raise ValidationError([f"unknown mode {request.mode!r}; expected one of "
-                               f"{', '.join(MODES)}"])
+        raise ValidationError(
+            [f"unknown mode {request.mode!r}; expected one of {', '.join(MODES)}"]
+        )
     environment = env if env is not None else dict(os.environ)
     config = request.effective_config()
     run_id = uuid.uuid4().hex[:12]
@@ -143,13 +145,23 @@ def run(
     if request.mode == "folder":
         if not request.source_dir:
             raise ValidationError(["folder mode requires --source-dir"])
-        raw_candidates, rejections = scan_directory(
-            request.source_dir,
-            recursive=(request.recursive if request.recursive is not None
-                       else config.defaults.recursive),
-            include=request.include,
-            exclude=request.exclude,
-        )
+        try:
+            raw_candidates, rejections = scan_directory(
+                request.source_dir,
+                recursive=(
+                    request.recursive
+                    if request.recursive is not None
+                    else config.defaults.recursive
+                ),
+                include=request.include,
+                exclude=request.exclude,
+            )
+        except NotADirectoryError as exc:
+            raise ValidationError([f"source directory not found: {exc}"]) from exc
+        except OSError as exc:
+            raise ValidationError(
+                [f"source directory cannot be read: {request.source_dir}: {exc}"]
+            ) from exc
         if rejections:
             raise ValidationError([f"{path}: {reason}" for path, reason in rejections])
         order = request.order if request.order is not None else config.defaults.order
@@ -189,15 +201,22 @@ def run(
         if config.validation.resize_if_over_limit or config.validation.normalize_exif:
             derivative_dir = tempfile.mkdtemp(prefix="tbis-derivatives-")
             validated = [
-                _with_derivative(image, config.validation, derivative_dir)
-                for image in validated
+                _with_derivative(image, config.validation, derivative_dir) for image in validated
             ]
 
         # -- Recipients ------------------------------------------------------
         recipients = resolve_recipients(config, request)
+        if request.mode == "manifest" and not recipients and rows is not None:
+            # Manifest mode: recipients may come from the rows themselves;
+            # the allowlist still gates every reference.
+            row_refs = tuple(dict.fromkeys(row.recipient_ref for row in rows))
+            recipients = resolve_refs(config, row_refs)
         if not request.dry_run and not recipients:
             raise ValidationError(
-                ["no recipients: pass --recipient or set defaults.recipients in the config"]
+                [
+                    "no recipients: pass --recipient, set defaults.recipients in the "
+                    "config, or reference allowlisted recipients in the manifest"
+                ]
             )
 
         # -- Planner ---------------------------------------------------------
@@ -208,8 +227,11 @@ def run(
             recipients=recipients,
             rows=rows,
             caption_mode=request.caption_mode or config.defaults.caption_mode,
-            caption_template=(request.caption_text if request.caption_text is not None
-                              else config.defaults.caption),
+            caption_template=(
+                request.caption_text
+                if request.caption_text is not None
+                else config.defaults.caption
+            ),
             caption_column=config.defaults.caption_column,
         )
 
@@ -219,6 +241,11 @@ def run(
         # -- Queue + Executor + TelegramClient + CheckpointStore + Reporter --
         reporter = Reporter(run_id=run_id, config=config, report_dir=request.report_dir)
         try:
+            # Planner-level skips (already delivered per checkpoint) are real
+            # report events, not silent omissions.
+            summary.events = list(build.skipped)
+            for outcome in build.skipped:
+                reporter.log_event(outcome)
             executor_config = config
             if request.mode == "manifest" and executor_config.send.concurrency > 1:
                 # One-by-one mode is strictly sequential (spec 1B).
@@ -227,8 +254,11 @@ def run(
                     executor_config,
                     send=dataclass_replace(executor_config.send, concurrency=1),
                 )
+            client = client_factory(config, environment)
+            bot = client.get_me()  # preflight: fail fast on a bad token
+            print_fn(f"preflight: authenticated as @{bot.username} (id {bot.id})")
             executor = RateLimitedExecutor(
-                client=client_factory(config, environment),
+                client=client,
                 config=executor_config,
                 checkpoint=checkpoint,
                 reporter=reporter,
@@ -236,7 +266,7 @@ def run(
             )
             summary.planned = len(build.plan)
             result = executor.run(build.plan, request.limit)
-            summary.events = result.events
+            summary.events.extend(result.events)
             if result.abort_reason is not None:
                 summary.aborted_reason = result.abort_reason
         finally:
@@ -259,8 +289,7 @@ def _candidates_from_rows(rows: list[ManifestRow]) -> list[ImageCandidate]:
     for row in rows:
         stat = Path(row.resolved_path).stat()
         candidates.append(
-            ImageCandidate(path=row.resolved_path, mtime_ns=stat.st_mtime_ns,
-                           size=stat.st_size)
+            ImageCandidate(path=row.resolved_path, mtime_ns=stat.st_mtime_ns, size=stat.st_size)
         )
     return candidates
 
@@ -286,8 +315,7 @@ def _finish_dry_run(
     summary.recompute()
     print_fn(f"DRY RUN - no network calls are made in this mode (mode: {request.mode})")
     print_fn(
-        f"recipients ({len(recipients)}): "
-        + ", ".join(f"{r.name}={r.chat_id}" for r in recipients)
+        f"recipients ({len(recipients)}): " + ", ".join(f"{r.name}={r.chat_id}" for r in recipients)
     )
     for warning in build.warnings:
         print_fn(f"warning: {warning}")
@@ -295,13 +323,10 @@ def _finish_dry_run(
     across = len(build.skipped) - in_run
     print_fn(f"skipped (duplicates within this run): {in_run}")
     print_fn(f"skipped (already delivered per checkpoint): {across}")
-    print_fn(f"plan: {len(build.plan)} send(s), {build.estimated_api_calls} "
-             "estimated API calls")
+    print_fn(f"plan: {len(build.plan)} send(s), {build.estimated_api_calls} estimated API calls")
     for item in build.plan:
         derivative_note = (
-            f" [derivative: {item.image.derivative_note}]"
-            if item.image.derivative_path
-            else ""
+            f" [derivative: {item.image.derivative_note}]" if item.image.derivative_path else ""
         )
         row_note = f" (manifest row {item.manifest_row})" if item.manifest_row else ""
         caption_text = item.caption if item.caption else "(none)"
@@ -337,10 +362,15 @@ def _code_from_summary(summary: RunSummary, location: str) -> RunResult:
 
 def resolve_recipients(config: Config, request: RunRequest) -> list[Recipient]:
     """Resolve recipient references (name or chat_id) against the allowlist."""
+    wanted = request.recipients or config.defaults.recipients
+    return resolve_refs(config, wanted)
+
+
+def resolve_refs(config: Config, wanted: tuple[str, ...]) -> list[Recipient]:
+    """Resolve explicit references (names or chat_ids) against the allowlist."""
     by_name = {entry.name: entry.chat_id for entry in config.recipients}
     by_id = {str(entry.chat_id): entry.chat_id for entry in config.recipients}
     name_by_id = {str(entry.chat_id): entry.name for entry in config.recipients}
-    wanted = request.recipients or config.defaults.recipients
     found: list[Recipient] = []
     missing: list[str] = []
     for reference in wanted:
@@ -354,8 +384,10 @@ def resolve_recipients(config: Config, request: RunRequest) -> list[Recipient]:
         found.append(Recipient(name=display, chat_id=chat_id))
     if missing:
         raise ValidationError(
-            [f"recipient(s) not in the allowlist: {', '.join(missing)}; allowlisted: "
-             f"{', '.join(e.name for e in config.recipients) or '(empty)'}"]
+            [
+                f"recipient(s) not in the allowlist: {', '.join(missing)}; allowlisted: "
+                f"{', '.join(e.name for e in config.recipients) or '(empty)'}"
+            ]
         )
     unique: list[Recipient] = []
     seen: set[tuple[str, str]] = set()

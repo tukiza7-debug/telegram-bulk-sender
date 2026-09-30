@@ -27,8 +27,8 @@ Escaping rules are quoted verbatim from https://core.telegram.org/bots/api
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
-from typing import Mapping
+from collections.abc import Mapping
+from datetime import UTC, datetime
 
 from .errors import ValidationError
 from .model import ParseMode
@@ -55,8 +55,10 @@ def check_template(template: str, known_custom: set[str], where: str) -> None:
     unknown = sorted(template_variables(template) - known)
     if unknown:
         raise ValidationError(
-            [f"{where}: unknown template variable(s) {', '.join(unknown)}; "
-             f"known: {', '.join(sorted(known))}"]
+            [
+                f"{where}: unknown template variable(s) {', '.join(unknown)}; "
+                f"known: {', '.join(sorted(known))}"
+            ]
         )
 
 
@@ -71,7 +73,7 @@ def render_caption(
 ) -> str:
     """Substitute template variables. Values are inserted raw; callers escape
     afterwards via escape_caption()."""
-    current = now if now is not None else datetime.now(timezone.utc)
+    current = now if now is not None else datetime.now(UTC)
     values: dict[str, str] = {
         "filename": filename,
         "stem": filename.rsplit(".", 1)[0] if "." in filename else filename,
@@ -113,6 +115,7 @@ def build_and_escape(
     now: datetime | None = None,
 ) -> str:
     """Render then escape in the only correct order (substitute -> escape)."""
-    raw = render_caption(template, filename=filename, index=index, total=total,
-                         custom=custom, now=now)
+    raw = render_caption(
+        template, filename=filename, index=index, total=total, custom=custom, now=now
+    )
     return escape_caption(raw, parse_mode)

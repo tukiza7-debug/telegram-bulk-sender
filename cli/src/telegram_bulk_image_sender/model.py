@@ -7,34 +7,33 @@ module is the vocabulary of the pipeline described in docs/ARCHITECTURE.md.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Union
+from enum import StrEnum
 
-ChatId = Union[int, str]
+ChatId = int | str
 """Telegram chat identifier: integer id or @channelname (as Bot API accepts)."""
 
 
-class OrderKey(str, Enum):
+class OrderKey(StrEnum):
     NAME = "name"
     MTIME = "mtime"
     MANIFEST_ROW = "manifest-row"
 
 
-class CaptionMode(str, Enum):
+class CaptionMode(StrEnum):
     NONE = "none"
     PER_IMAGE = "per-image"
     PER_RUN = "per-run"
     MANIFEST_COLUMN = "manifest-column"
 
 
-class ParseMode(str, Enum):
+class ParseMode(StrEnum):
     NONE = "none"
     HTML = "html"
     MARKDOWN = "markdown"
     MARKDOWN_V2 = "markdownv2"
 
 
-class ResultStatus(str, Enum):
+class ResultStatus(StrEnum):
     """Outcome of one planned send, as recorded in the report."""
 
     SENT = "sent"

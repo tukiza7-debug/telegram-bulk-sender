@@ -13,11 +13,15 @@ import hashlib
 # overhead negligible. Exported for tests, which assert chunked reading.
 CHUNK_SIZE = 1024 * 1024
 
+# Module-level alias of builtin open: a single indirection point that lets
+# tests wrap file reads without touching global builtins.
+_open = open
+
 
 def sha256_of_file(path: str) -> str:
     """Return the hex SHA-256 of a file, reading it in CHUNK_SIZE chunks."""
     digest = hashlib.sha256()
-    with open(path, "rb") as fh:
+    with _open(path, "rb") as fh:
         while True:
             chunk = fh.read(CHUNK_SIZE)
             if not chunk:

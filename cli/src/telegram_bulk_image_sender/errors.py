@@ -36,6 +36,11 @@ class TbisError(Exception):
     """Base class for every error raised deliberately by this package."""
 
     kind: ErrorKind = ErrorKind.PERMANENT
+    # API-context defaults; TelegramApiError subclasses fill these in. The
+    # executor reads them uniformly on any TbisError.
+    http_status: int | None = None
+    api_error_code: int | None = None
+    api_description: str | None = None
 
     def __init__(self, message: str) -> None:
         super().__init__(message)

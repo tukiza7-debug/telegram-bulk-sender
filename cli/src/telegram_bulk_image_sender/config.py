@@ -15,15 +15,19 @@ from __future__ import annotations
 
 import re
 import tomllib
-from dataclasses import dataclass, replace
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
-from typing import Mapping
+from typing import TypeVar
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
 
 from .errors import ConfigError, SecretError
 from .model import CaptionMode, OrderKey, ParseMode
+
+_E = TypeVar("_E", bound=StrEnum)
 
 # Official Bot API documents sendPhoto at "at most 10 MB"; the cap is
 # configurable so a self-hosted Bot API server can raise it.
@@ -182,8 +186,14 @@ class _Reader:
             raise ConfigError(f"{self.path(key)}: expected true/false, got {value!r}")
         return value
 
-    def int_value(self, key: str, *, default: int | None, minimum: int | None = None,
-                  maximum: int | None = None) -> int:
+    def int_value(
+        self,
+        key: str,
+        *,
+        default: int | None,
+        minimum: int | None = None,
+        maximum: int | None = None,
+    ) -> int:
         if not self.has(key):
             if default is None:
                 raise ConfigError(f"{self.path(key)}: missing required value")
@@ -197,8 +207,14 @@ class _Reader:
             raise ConfigError(f"{self.path(key)}: must be <= {maximum}, got {value}")
         return value
 
-    def float_value(self, key: str, *, default: float | None, minimum: float | None = None,
-                    maximum: float | None = None) -> float:
+    def float_value(
+        self,
+        key: str,
+        *,
+        default: float | None,
+        minimum: float | None = None,
+        maximum: float | None = None,
+    ) -> float:
         if not self.has(key):
             if default is None:
                 raise ConfigError(f"{self.path(key)}: missing required value")
@@ -213,16 +229,23 @@ class _Reader:
             raise ConfigError(f"{self.path(key)}: must be <= {maximum}, got {number}")
         return number
 
-    def enum_value(self, key: str, enum_type: type, default: str | None) -> object:
+    def enum_value(
+        self, key: str, *, parse: Callable[[str], _E], allowed: str, default: str | None
+    ) -> _E:
+        """Parse an enum-typed value. `parse` is the enum class itself;
+        `allowed` is the pre-rendered list of valid values for error
+        messages (enum metaclass iteration is not mypy-friendly)."""
         if not self.has(key):
             if default is None:
                 raise ConfigError(f"{self.path(key)}: missing required value")
-            return enum_type(default)
+            return parse(default)
         value = self._raw[key]
-        if not isinstance(value, str) or value not in {member.value for member in enum_type}:
-            allowed = "/".join(member.value for member in enum_type)
-            raise ConfigError(f"{self.path(key)}: expected one of {allowed}, got {value!r}")
-        return enum_type(value)
+        if isinstance(value, str):
+            try:
+                return parse(value)
+            except ValueError:
+                pass
+        raise ConfigError(f"{self.path(key)}: expected one of {allowed}, got {value!r}")
 
 
 def _parse_chat_id(raw: object, where: str) -> int | str:
@@ -245,9 +268,13 @@ def _build_telegram(raw: Mapping[str, object]) -> TelegramConfig:
     base = r.str_value("api_base_url", default=DEFAULT_API_BASE_URL)
     if not (base.startswith("https://") or base.startswith("http://")):
         raise ConfigError("telegram.api_base_url: must start with https:// or http://")
-    parse_mode = r.enum_value("parse_mode", ParseMode, ParseMode.HTML.value)
+    parse_mode = r.enum_value(
+        "parse_mode",
+        parse=ParseMode,
+        allowed="none/html/markdown/markdownv2",
+        default=ParseMode.HTML.value,
+    )
     timeout = r.float_value("timeout_seconds", default=60.0, minimum=1.0)
-    assert isinstance(parse_mode, ParseMode)
     return TelegramConfig(api_base_url=base, parse_mode=parse_mode, timeout_seconds=timeout)
 
 
@@ -270,14 +297,16 @@ def _build_quiet_hours(raw: Mapping[str, object]) -> QuietHoursConfig:
 
 def _build_limits(raw: Mapping[str, object]) -> LimitsConfig:
     r = _Reader(raw, "limits.")
-    r.known_keys({"global_per_minute", "per_recipient_per_minute", "daily_cap_per_recipient",
-                  "quiet_hours"})
+    r.known_keys(
+        {"global_per_minute", "per_recipient_per_minute", "daily_cap_per_recipient", "quiet_hours"}
+    )
     quiet_raw = raw.get("quiet_hours")
-    quiet = _build_quiet_hours(quiet_raw) if isinstance(quiet_raw, Mapping) else QuietHoursConfig()
+    quiet = _build_quiet_hours(quiet_raw) if isinstance(quiet_raw, dict) else QuietHoursConfig()
     return LimitsConfig(
         global_per_minute=r.float_value("global_per_minute", default=60.0, minimum=0.1),
-        per_recipient_per_minute=r.float_value("per_recipient_per_minute", default=18.0,
-                                               minimum=0.1),
+        per_recipient_per_minute=r.float_value(
+            "per_recipient_per_minute", default=18.0, minimum=0.1
+        ),
         daily_cap_per_recipient=r.int_value("daily_cap_per_recipient", default=50, minimum=1),
         quiet_hours=quiet,
     )
@@ -306,11 +335,19 @@ def _build_send(raw: Mapping[str, object]) -> SendConfig:
 
 def _build_validation(raw: Mapping[str, object]) -> ValidationConfig:
     r = _Reader(raw, "validation.")
-    r.known_keys({"max_file_mb", "verify_dimensions", "max_total_dimension", "normalize_exif",
-                  "resize_if_over_limit"})
+    r.known_keys(
+        {
+            "max_file_mb",
+            "verify_dimensions",
+            "max_total_dimension",
+            "normalize_exif",
+            "resize_if_over_limit",
+        }
+    )
     return ValidationConfig(
-        max_file_mb=r.float_value("max_file_mb", default=10.0, minimum=0.01,
-                                  maximum=float(ABSOLUTE_MAX_FILE_MB)),
+        max_file_mb=r.float_value(
+            "max_file_mb", default=10.0, minimum=0.01, maximum=float(ABSOLUTE_MAX_FILE_MB)
+        ),
         verify_dimensions=r.bool_value("verify_dimensions", default=True),
         max_total_dimension=r.int_value("max_total_dimension", default=10000, minimum=1),
         normalize_exif=r.bool_value("normalize_exif", default=False),
@@ -329,14 +366,23 @@ def _build_dedupe(raw: Mapping[str, object]) -> DedupeConfig:
 
 def _build_defaults(raw: Mapping[str, object]) -> DefaultsConfig:
     r = _Reader(raw, "defaults.")
-    r.known_keys({"recipients", "caption", "caption_mode", "caption_column", "order", "reverse",
-                  "recursive"})
+    r.known_keys(
+        {"recipients", "caption", "caption_mode", "caption_column", "order", "reverse", "recursive"}
+    )
     recipients_raw = raw.get("recipients", ())
+    if recipients_raw == ():
+        recipients_raw = []
     if not isinstance(recipients_raw, list) or any(not isinstance(x, str) for x in recipients_raw):
         raise ConfigError("defaults.recipients: must be a list of allowlist names")
-    caption_mode = r.enum_value("caption_mode", CaptionMode, CaptionMode.PER_IMAGE.value)
-    order = r.enum_value("order", OrderKey, OrderKey.NAME.value)
-    assert isinstance(caption_mode, CaptionMode) and isinstance(order, OrderKey)
+    caption_mode = r.enum_value(
+        "caption_mode",
+        parse=CaptionMode,
+        allowed="none/per-image/per-run/manifest-column",
+        default=CaptionMode.PER_IMAGE.value,
+    )
+    order = r.enum_value(
+        "order", parse=OrderKey, allowed="name/mtime/manifest-row", default=OrderKey.NAME.value
+    )
     return DefaultsConfig(
         recipients=tuple(recipients_raw),
         caption=r.str_value("caption", default="", allow_empty=True),
@@ -348,7 +394,7 @@ def _build_defaults(raw: Mapping[str, object]) -> DefaultsConfig:
     )
 
 
-def _build_recipients(raw: Mapping[str, object]) -> tuple[RecipientEntry, ...]:
+def _build_recipients(raw: object) -> tuple[RecipientEntry, ...]:
     if not isinstance(raw, list):
         raise ConfigError("recipients: must be a list of {name, chat_id} entries")
     entries: list[RecipientEntry] = []
@@ -391,8 +437,18 @@ def _build_storage(raw: Mapping[str, object]) -> StorageConfig:
 
 def parse_config(raw: Mapping[str, object]) -> Config:
     """Validate a raw mapping into a Config, naming every offending key."""
-    known = {"telegram", "limits", "kill_switch", "send", "validation", "dedupe", "defaults",
-             "recipients", "security", "storage"}
+    known = {
+        "telegram",
+        "limits",
+        "kill_switch",
+        "send",
+        "validation",
+        "dedupe",
+        "defaults",
+        "recipients",
+        "security",
+        "storage",
+    }
     unknown = sorted(set(raw) - known)
     if unknown:
         raise ConfigError(f"unknown top-level config key(s): {', '.join(unknown)}")
@@ -447,11 +503,6 @@ def load_config(path: str | None) -> Config:
     return parse_config(raw)
 
 
-def with_overrides(config: Config, **changes: object) -> Config:
-    """Return a copy of config with section-level replacements (CLI wins)."""
-    return replace(config, **changes)
-
-
 def resolve_token(config: Config, env: Mapping[str, str], *, required: bool = True) -> str | None:
     """Resolve the bot token from env var or the git-ignored secrets file.
 
@@ -472,8 +523,7 @@ def resolve_token(config: Config, env: Mapping[str, str], *, required: bool = Tr
     if required:
         raise SecretError(
             f"no bot token found: set the {config.security.token_env} environment variable"
-            + (f" or create {config.security.secrets_file}"
-               if config.security.secrets_file else "")
+            + (f" or create {config.security.secrets_file}" if config.security.secrets_file else "")
         )
     return None
 

@@ -16,7 +16,7 @@ mapping from exceptions to delays happens here.
 from __future__ import annotations
 
 import random
-from typing import Callable
+from collections.abc import Callable
 
 from .errors import ErrorKind, RateLimitedError, TbisError
 
@@ -47,10 +47,11 @@ class RetryPolicy:
 
     def delay_for(self, exc: TbisError, attempt: int) -> float:
         """Seconds to wait before the next attempt (attempt is 1-based)."""
+        jitter = float(self._rng())
         if isinstance(exc, RateLimitedError):
-            return exc.retry_after + self._rng() * 0.5
+            return exc.retry_after + jitter * 0.5
         raw = self.base_seconds * (2 ** (attempt - 1))
         capped = min(raw, self.max_seconds)
         # Jitter in [0.5, 1.0] of the capped delay: keeps thundering-herd
         # away without ever exceeding the configured maximum.
-        return capped * (0.5 + 0.5 * self._rng())
+        return float(capped * (0.5 + 0.5 * jitter))

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import csv
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .config import Config
@@ -30,7 +30,7 @@ _CSV_FIELDS = _JSONL_FIELDS  # same schema for the CSV audit export
 
 
 def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+    return datetime.now(UTC).isoformat(timespec="milliseconds")
 
 
 class Reporter:
@@ -42,7 +42,8 @@ class Reporter:
         self._dir = Path(report_dir or config.storage.report_dir) / f"run-{run_id}"
         self._dir.mkdir(parents=True, exist_ok=True)
         self._jsonl_path = self._dir / "log.jsonl"
-        self._jsonl = open(self._jsonl_path, "a", encoding="utf-8")
+        # Long-lived handle owned by this instance; closed in close().
+        self._jsonl = open(self._jsonl_path, "a", encoding="utf-8")  # noqa: SIM115
 
     @property
     def directory(self) -> str:
@@ -165,9 +166,7 @@ def _redact(config: Config) -> dict[str, object]:
             "within_run": config.dedupe.within_run,
             "across_runs": config.dedupe.across_runs,
         },
-        "recipients": [
-            {"name": r.name, "chat_id": str(r.chat_id)} for r in config.recipients
-        ],
+        "recipients": [{"name": r.name, "chat_id": str(r.chat_id)} for r in config.recipients],
         "storage": {
             "state_file": config.storage.state_file,
             "report_dir": config.storage.report_dir,

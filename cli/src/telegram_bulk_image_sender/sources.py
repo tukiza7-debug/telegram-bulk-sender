@@ -74,7 +74,7 @@ def read_manifest(manifest_path: str, *, order: OrderKey, reverse: bool) -> list
                 f"{resolved.suffix or '(none)'}: {file_value}"
             )
             continue
-        caption = record.get(COLUMN_CAPTION)
+        caption = record.get(COLUMN_CAPTION) or None
         custom = {
             k: v
             for k, v in record.items()
@@ -93,13 +93,19 @@ def read_manifest(manifest_path: str, *, order: OrderKey, reverse: bool) -> list
     if issues:
         raise ValidationError(issues)
 
-    if order in (OrderKey.NAME, OrderKey.MTIME):
-        if order is OrderKey.NAME:
-            keyed = [(natural_key(Path(r.resolved_path).name), r.row_number, r) for r in rows]
-        else:
-            keyed = [(Path(r.resolved_path).stat().st_mtime_ns, r.row_number, r) for r in rows]
-        keyed.sort(key=lambda t: t[:2])
-        rows = [t[2] for t in keyed]
+    if order is OrderKey.NAME:
+        # natural_key is a total order (raw-name tiebreak), so sorting on it
+        # alone is deterministic.
+        rows = sorted(rows, key=lambda r: natural_key(Path(r.resolved_path).name))
+    elif order is OrderKey.MTIME:
+        # mtime_ns first, natural name as tiebreak for identical timestamps.
+        rows = sorted(
+            rows,
+            key=lambda r: (
+                Path(r.resolved_path).stat().st_mtime_ns,
+                natural_key(Path(r.resolved_path).name),
+            ),
+        )
     if reverse:
         rows.reverse()
     return rows
