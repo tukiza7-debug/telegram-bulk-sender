@@ -76,17 +76,24 @@ strict = true
 warn_unreachable = true
 warn_unused_ignores = true
 files = ["src", "tests"]
-mypy_path = "src"
+# src (the shipped library) is held to the full strict gate; tests get a
+# pragmatic subset below, but are still type-checked.
+mypy_path = ["src", "tests"]
 explicit_package_bases = true
 
 [[tool.mypy.overrides]]
-module = "tests.*"
+module = ["conftest", "_fakeserver", "tests.*"]
 disallow_untyped_defs = false
 disallow_untyped_calls = false
+disallow_any_generics = false
+warn_return_any = false
+disallow_subclassing_any = false
+warn_unused_ignores = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q --strict-markers"
+pythonpath = ["src", "tests"]
 markers = [
     "integration: end-to-end runs against the in-process fake Bot API server",
     "slow: long-running tests (perf sanity, 1000-file dry run)",
