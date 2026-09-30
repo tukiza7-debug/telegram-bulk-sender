@@ -4,8 +4,9 @@
 
 The major update of the product: a production-grade command-line tool and
 importable Python library that bulk-sends images through the Telegram Bot
-API to explicitly allowlisted, consent-based recipients. The Android app is
-untouched and continues its own 1.x line; the CLI lives in `cli/` with its
+API to explicitly allowlisted, consent-based recipients. The Android app
+joins the 2.0.0 line as a version-alignment release — no functional change
+since v1.2.4 (pubspec 2.0.0+1); the CLI lives in `cli/` with its
 own CI workflow (`.github/workflows/cli.yml`).
 
 - **Three delivery modes over ONE pipeline** (no forked logic):
