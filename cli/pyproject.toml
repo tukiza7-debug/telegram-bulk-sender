@@ -1,0 +1,105 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "telegram-bulk-image-sender"
+version = "2.0.0"
+description = "Production-grade CLI and library that bulk-sends images to allowlisted Telegram chats via the Bot API, with dry-run, checkpoint resume and rate limiting."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Telegram Bulk Sender maintainers" }]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Environment :: Console",
+    "Topic :: Communications :: Chat",
+]
+
+# Dependency justification (one line per package, per anti-slop rule 12):
+# - PyYAML: the spec mandates shipping config.example.yaml; PyYAML parses it.
+#   TOML configs are handled by stdlib tomllib with zero extra dependencies.
+# - Pillow: real image verification (truncation), dimension checks, EXIF
+#   orientation normalisation and --resize-if-over-limit derivatives.
+#   Python's stdlib cannot do any of these.
+dependencies = [
+    "PyYAML>=6.0",
+    "Pillow>=10.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "types-PyYAML>=6.0",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+]
+
+[project.scripts]
+tbis = "telegram_bulk_image_sender.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+telegram_bulk_image_sender = ["py.typed"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # bugbear
+    "SIM", # simplify
+    "RUF", # ruff-specific
+]
+# Line length is enforced by the formatter.
+ignore = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"
+docstring-code-format = false
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unreachable = true
+warn_unused_ignores = true
+files = ["src", "tests"]
+mypy_path = "src"
+explicit_package_bases = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+disallow_untyped_calls = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+markers = [
+    "integration: end-to-end runs against the in-process fake Bot API server",
+    "slow: long-running tests (perf sanity, 1000-file dry run)",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["telegram_bulk_image_sender"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+exclude_also = [
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+]
