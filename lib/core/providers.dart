@@ -14,9 +14,11 @@ import 'background/send_task.dart';
 import 'background/update_check_service.dart';
 import 'constants.dart';
 import 'network/bot_token.dart';
+import 'network/reachability.dart';
 import 'network/telegram_api_client.dart';
 import 'network/telegram_exceptions.dart';
 import 'network/telegram_models.dart';
+import 'token_sanitizer.dart';
 import 'sending/image_preparation.dart';
 import 'sending/models.dart';
 import 'sending/sending_engine.dart';
@@ -182,6 +184,11 @@ final telegramClientFactoryProvider =
   (ref) => (token) => TelegramApiClient(token),
 );
 
+/// Overridden in tests with a fake adapter-driven probe.
+final reachabilityProvider = Provider<TelegramReachability>(
+  (ref) => TelegramReachability(),
+);
+
 /// One-shot notice: the previously saved token was found to be no longer
 /// valid on launch (regenerated/revoked in @BotFather) and has been cleared.
 /// The not-connected home state surfaces this so the user understands why
@@ -279,35 +286,59 @@ class BotSessionController extends Notifier<BotSession?> {
     }
   }
 
-  Future<BotUser> connect(String rawToken) async {
+  Future<BotUser> connect(
+    String rawToken, {
+    List<String> sanitizerLog = const [],
+  }) async {
     // Real-token fix: clean the paste BEFORE it ever reaches the network.
-    // Tokens copied out of BotFather messages, URLs or password managers
-    // often carry labels, backticks, quotes, zero-width characters or
-    // internal whitespace that used to cause spurious 401s.
-    final token = BotTokenSanitizer.normalize(rawToken);
-    if (token == null || !BotTokenSanitizer.mightBeToken(token)) {
+    // The sanitizer folds smart punctuation, strips labels, re-joins
+    // line-wrapped copies and extracts the token from surrounding prose.
+    // A paste with MORE THAN ONE token is refused here — the UI lets the
+    // user pick first; we never guess silently.
+    final sanitization = TokenSanitizer.sanitize(rawToken);
+    final token = sanitization.token;
+    if (token == null) {
+      if (sanitization.ambiguous) {
+        throw TelegramApiException(
+          kind: TelegramErrorKind.badRequest,
+          description: 'MULTIPLE_TOKENS_PASTED',
+          diagnostics: [
+            for (final candidate in sanitization.candidates)
+              'found ${TokenSanitizer.mask(candidate)} '
+                  '(${candidate.length} chars)',
+          ],
+        );
+      }
       throw TelegramApiException(
         kind: TelegramErrorKind.badRequest,
         description: 'NOT_A_TOKEN',
       );
     }
+    final log =
+        sanitizerLog.isNotEmpty ? sanitizerLog : sanitization.actions;
     final api = ref.read(telegramClientFactoryProvider)(token);
     BotUser bot;
     try {
       bot = await api.getMe();
     } on TelegramApiException catch (e) {
       // Re-throw with the token redacted so the screens' "Details" section
-      // can show the raw technical info safely, plus the MASKED token that
-      // was actually tried — the only way a user stuck in a
-      // "rejected, rejected, rejected…" loop can tell a truncated or
-      // mangled paste apart from a genuinely revoked token.
+      // can show the raw technical info safely, plus the full
+      // self-diagnosis block: the MASKED token that was actually tried,
+      // its length, what the sanitizer changed and any soft warnings —
+      // the only way a user stuck in a "rejected, rejected, rejected…"
+      // loop can tell a truncated paste apart from a dead token.
       throw TelegramApiException(
         kind: e.kind,
         statusCode: e.statusCode,
         errorCode: e.errorCode,
         description: api.sanitize(e.description),
         retryAfter: e.retryAfter,
-        triedTokenMask: BotTokenSanitizer.mask(token),
+        triedTokenMask: TokenSanitizer.mask(token),
+        diagnostics: [
+          'Token length: ${token.length} chars (expected 40-60)',
+          for (final line in log) 'Cleaned: $line',
+          ...sanitization.warnings,
+        ],
       );
     } finally {
       // The client must be closed on BOTH the success and error paths —

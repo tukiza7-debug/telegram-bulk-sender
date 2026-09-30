@@ -70,6 +70,32 @@ class _ThrowingAdapter implements HttpClientAdapter {
   void close({bool force = false}) {}
 }
 
+/// Throws [error] on the first call, then returns [second]; records the
+/// per-attempt connect timeout so tests can prove the retry tightened it.
+class _SequenceAdapter implements HttpClientAdapter {
+  _SequenceAdapter(this.error, this.second);
+
+  final DioException error;
+  final ResponseBody second;
+  int calls = 0;
+  final List<Duration?> connectTimeouts = [];
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    calls++;
+    connectTimeouts.add(options.connectTimeout);
+    if (calls == 1) throw error;
+    return second;
+  }
+
+  @override
+  void close({bool force = false}) {}
+}
+
 void main() {
   test('429 retry_after then 200 — the file is re-sent on the second attempt',
       () async {
@@ -247,7 +273,8 @@ void main() {
     client.dispose();
   });
 
-  test('a timeout maps to a network error and getMe never retries', () async {
+  test('a timeout is retried once with a 10s timeout, then reported as E_NET',
+      () async {
     final adapter = _ThrowingAdapter(
       DioException.connectionTimeout(
         timeout: const Duration(milliseconds: 50),
@@ -267,10 +294,52 @@ void main() {
     await expectLater(
       client.getMe(),
       throwsA(isA<TelegramApiException>()
-          .having((e) => e.kind, 'kind', TelegramErrorKind.network)),
+          .having((e) => e.kind, 'kind', TelegramErrorKind.network)
+          .having((e) => e.friendlyMessageOnboarding, 'message',
+              contains('NOT a token problem'))),
     );
-    expect(adapter.calls, 1,
-        reason: 'connect-time checks must fail fast, not spin in backoff');
+    expect(adapter.calls, 2,
+        reason: 'E_TIMEOUT: exactly ONE retry before reporting E_NET');
+    client.dispose();
+  });
+
+  test('a timeout then success — the retry runs with the 10s timeout',
+      () async {
+    final adapter = _SequenceAdapter(
+      DioException.connectionTimeout(
+        timeout: const Duration(milliseconds: 50),
+        requestOptions: RequestOptions(path: '/getMe'),
+      ),
+      ResponseBody.fromString(
+        jsonEncode({
+          'ok': true,
+          'result': {
+            'id': 42,
+            'username': 'bulk_test_bot',
+            'first_name': 'Bulk',
+          },
+        }),
+        200,
+        headers: {Headers.contentTypeHeader: ['application/json']},
+      ),
+    );
+    final dio = Dio(BaseOptions(
+      baseUrl: 'https://api.telegram.org/',
+      validateStatus: (status) => status != null && status < 600,
+    ))..httpClientAdapter = adapter;
+    final client = TelegramApiClient(
+      '1234:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsawk',
+      dio: dio,
+      sleep: (_) async {},
+    );
+
+    final bot = await client.getMe();
+    expect(bot.username, 'bulk_test_bot');
+    expect(adapter.calls, 2);
+    expect(adapter.connectTimeouts[0], isNull,
+        reason: 'the first attempt keeps the client defaults');
+    expect(adapter.connectTimeouts[1], const Duration(seconds: 10),
+        reason: 'the retry is bounded by the tight 10s timeout');
     client.dispose();
   });
 

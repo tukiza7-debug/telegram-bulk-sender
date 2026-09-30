@@ -60,7 +60,8 @@ void main() {
         'message': 'Resource not found', // e.g. a proxy JSON error
       });
       expect(ex.kind, TelegramErrorKind.network);
-      expect(ex.friendlyMessage, contains("Can't reach Telegram"));
+      expect(ex.friendlyMessage, contains('Cannot reach api.telegram.org'));
+      expect(ex.friendlyMessage, contains('NOT a token problem'));
     });
   });
 

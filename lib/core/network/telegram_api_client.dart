@@ -101,14 +101,26 @@ class TelegramApiClient {
     Map<String, dynamic> query, {
     RetryWaitListener? onWait,
     int transientRetries = maxTransientRetries,
+    int timeoutRetries = 0,
   }) async {
     var attempt = 0;
     while (true) {
       attempt++;
+      // A timed-out attempt is retried exactly [timeoutRetries] times with
+      // a tight 10-second timeout (E_TIMEOUT) before it is reported as a
+      // network problem — a hung radio must never read as a bad token.
+      final options = attempt > 1 && timeoutRetries > 0
+          ? Options(
+              connectTimeout: const Duration(seconds: 10),
+              sendTimeout: const Duration(seconds: 10),
+              receiveTimeout: const Duration(seconds: 10),
+            )
+          : null;
       try {
         final response = await _dio.get<dynamic>(
           method,
           queryParameters: query,
+          options: options,
         );
         final body = _decode(response);
         if (body['ok'] == true) return body;
@@ -120,6 +132,12 @@ class TelegramApiClient {
         }
         throw ex;
       } on DioException catch (e) {
+        final isTimeout = e.type == DioExceptionType.connectionTimeout ||
+            e.type == DioExceptionType.receiveTimeout ||
+            e.type == DioExceptionType.sendTimeout;
+        if (isTimeout && attempt <= timeoutRetries) {
+          continue;
+        }
         final ex = TelegramApiException.network(sanitize(e.message ?? 'Network error'));
         if (await _shouldRetry(ex, attempt, onWait,
             transientRetries: transientRetries)) {
@@ -207,10 +225,13 @@ class TelegramApiClient {
 
   /// Validates the bot token. Throws [TelegramApiException] on failure.
   ///
-  /// Zero transient retries: an offline connect must fail fast with "Can't
-  /// reach Telegram" instead of spinning through minutes of backoff.
+  /// Zero transient retries: an offline connect must fail fast instead of
+  /// spinning through minutes of backoff. A TIMEOUT is the one exception —
+  /// it is retried once with a tight 10-second timeout and, if it times out
+  /// again, reported as a network problem (never as a token problem).
   Future<BotUser> getMe() async {
-    final body = await _get('getMe', const {}, transientRetries: 0);
+    final body =
+        await _get('getMe', const {}, transientRetries: 0, timeoutRetries: 1);
     return BotUser.fromJson((body['result'] as Map<String, dynamic>));
   }
 

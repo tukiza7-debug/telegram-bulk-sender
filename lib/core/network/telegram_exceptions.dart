@@ -7,6 +7,7 @@ class TelegramApiException implements Exception {
     this.description = '',
     this.retryAfter,
     this.triedTokenMask,
+    this.diagnostics = const [],
   });
 
   final TelegramErrorKind kind;
@@ -25,6 +26,11 @@ class TelegramApiException implements Exception {
   /// @BotFather displays and spot truncated or mangled pastes. Never
   /// contains enough of the secret to be usable.
   final String? triedTokenMask;
+
+  /// Extra self-diagnosis lines (token length, sanitizer action log,
+  /// soft warnings) rendered in the "Details" section before the raw
+  /// HTTP facts. Never contains the token.
+  final List<String> diagnostics;
 
   bool get isRateLimited => kind == TelegramErrorKind.rateLimited;
   bool get isTransient =>
@@ -64,7 +70,9 @@ class TelegramApiException implements Exception {
       case TelegramErrorKind.serverError:
         return 'Telegram server error. Retrying…';
       case TelegramErrorKind.network:
-        return "Can't reach Telegram. Check your connection or VPN.";
+        return 'Cannot reach api.telegram.org. Check your connection, try '
+            'mobile data, or disable any VPN/proxy. This is NOT a token '
+            'problem.';
       case TelegramErrorKind.unknown:
         return 'Unexpected error: ${_trim(description)}';
     }
@@ -82,15 +90,22 @@ class TelegramApiException implements Exception {
             'Details to compare the token the app actually received.';
       case TelegramErrorKind.chatNotFound:
       case TelegramErrorKind.forbidden:
-      case TelegramErrorKind.badRequest:
       case TelegramErrorKind.fileTooLarge:
+        return friendlyMessage;
+      case TelegramErrorKind.badRequest:
+        if (description.contains('MULTIPLE_TOKENS_PASTED')) {
+          return 'More than one bot token was found in your paste. Open '
+              'Details to see the tokens found, and paste only ONE token.';
+        }
         return friendlyMessage;
       case TelegramErrorKind.rateLimited:
         return 'Telegram is rate limiting you. Wait a moment and try again.';
       case TelegramErrorKind.serverError:
         return 'Telegram has a temporary problem. Try again in a minute.';
       case TelegramErrorKind.network:
-        return "Can't reach Telegram. Check your connection or VPN.";
+        return 'Cannot reach api.telegram.org. Check your connection, try '
+            'mobile data, or disable any VPN/proxy. This is NOT a token '
+            'problem.';
       case TelegramErrorKind.unknown:
         return 'Unexpected error: ${_trim(description)}';
     }
@@ -102,6 +117,7 @@ class TelegramApiException implements Exception {
     final parts = <String>[
       if (triedTokenMask != null)
         'Tried token: $triedTokenMask (compare with @BotFather)',
+      ...diagnostics,
       if (statusCode != null) 'HTTP status: $statusCode',
       if (errorCode != null) 'Telegram error_code: $errorCode',
       if (description.isNotEmpty) 'Description: ${_trim(description)}',

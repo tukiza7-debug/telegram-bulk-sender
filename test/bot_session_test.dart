@@ -278,7 +278,7 @@ void main() {
     test('late 401 for the old token never clobbers a newer reconnect',
         () async {
       final oldToken = '111:AAAA_old_secret_token';
-      final newToken = '222:BBBB_new_secret_token';
+      final newToken = '22222:BBBB_new_secret_token';
       final store = _MemTokenStore()..value = oldToken;
 
       final oldApiGate = Completer<BotUser>();
@@ -313,7 +313,7 @@ void main() {
     test('late getMe success for the old token never overwrites the new bot',
         () async {
       final oldToken = '111:AAAA_old_secret_token';
-      final newToken = '222:BBBB_new_secret_token';
+      final newToken = '22222:BBBB_new_secret_token';
       final store = _MemTokenStore()..value = oldToken;
 
       final oldApiGate = Completer<BotUser>();
@@ -364,14 +364,14 @@ void main() {
       container.read(botResetNoticeProvider.notifier).state = true;
 
       final bot = await notifier.connect(
-        '  Token: `3333:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsawk`  ',
+        '  Token: `33333:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsawk`  ',
       );
 
       expect(bot.mention, '@bulk_test_bot');
       final session = container.read(botSessionProvider);
-      expect(session?.token, '3333:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsawk');
+      expect(session?.token, '33333:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsawk');
       expect(session?.status, BotLinkStatus.verified);
-      expect(store.value, '3333:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsawk');
+      expect(store.value, '33333:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsawk');
       expect(container.read(botResetNoticeProvider), isFalse);
     });
 
@@ -394,7 +394,7 @@ void main() {
         () async {
       // A user stuck in a "rejected" loop must be able to compare the
       // token the app actually sent with what @BotFather shows.
-      const raw = '3333:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsawk';
+      const raw = '33333:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsawk';
       final container = await _container(
         store: _MemTokenStore(),
         apiFor: (_) => _FakeApi(() async => throw _unauthorized()),
@@ -422,6 +422,77 @@ void main() {
               ),
         ),
       );
+    });
+
+    test('a paste with two tokens is refused before any network call',
+        () async {
+      final store = _MemTokenStore();
+      final api = _FakeApi(() async => _FakeApi.okBot);
+      final container = await _container(store: store, apiFor: (_) => api);
+      final notifier = container.read(botSessionProvider.notifier);
+
+      await expectLater(
+        notifier.connect(
+          'First 123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsawk '
+          'then 987654321:AABbCcDdEeFfGgHhIiJjKkLlMmNnOoPpQq',
+        ),
+        throwsA(isA<TelegramApiException>()
+            .having((e) => e.kind, 'kind', TelegramErrorKind.badRequest)
+            .having((e) => e.description, 'description',
+                contains('MULTIPLE_TOKENS_PASTED'))),
+      );
+      expect(api.getMeCalls, 0,
+          reason: 'several tokens found -> let the user pick, never guess');
+      expect(store.value, isNull);
+    });
+
+    test('401 details carry fingerprint + length + cleaning log, no secret',
+        () async {
+      final container = await _container(
+        store: _MemTokenStore(),
+        apiFor: (_) => _FakeApi(() async => throw _unauthorized()),
+      );
+      final notifier = container.read(botSessionProvider.notifier);
+
+      TelegramApiException? caught;
+      try {
+        await notifier
+            .connect('  Token: `33333:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsawk`  ');
+      } on TelegramApiException catch (e) {
+        caught = e;
+      }
+
+      expect(caught, isNotNull);
+      final details = caught!.technicalDetails;
+      expect(details, contains('Tried token: 33333:AAHd…awk'));
+      expect(details, contains('Token length: 41 chars (expected 40-60)'));
+      expect(details, contains('Cleaned:'));
+      expect(details, contains('HTTP status: 401'));
+      expect(details, isNot(contains('AAHdqTcvCH1vGWJxfSeofSAs')),
+          reason: 'the raw secret must never reach the Details block');
+    });
+
+    test('a launch timeout keeps the saved session offline (never wiped)',
+        () async {
+      final store = _MemTokenStore()..value = '111:AAAA_offline_secret';
+      final container = await _container(
+        store: store,
+        apiFor: (_) => _FakeApi(
+          () async => throw TelegramApiException(
+            kind: TelegramErrorKind.network,
+            description: 'The request connection timed out',
+          ),
+        ),
+      );
+      final notifier = container.read(botSessionProvider.notifier);
+
+      await notifier.restore();
+      await pumpEventQueue();
+
+      final session = container.read(botSessionProvider);
+      expect(session?.status, BotLinkStatus.offline);
+      expect(store.value, '111:AAAA_offline_secret');
+      expect(container.read(botResetNoticeProvider), isFalse);
     });
   });
 }
