@@ -3,9 +3,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_symbols_icons/symbols.dart';
 
+import '../../core/network/reachability.dart';
 import '../../core/network/telegram_exceptions.dart';
 import '../../core/providers.dart';
+import '../../core/token_sanitizer.dart';
 import '../../core/design_system/app_theme.dart';
+import '../common/token_input_field.dart';
 import '../common/widgets.dart';
 
 /// First screen: connect the bot by validating a Telegram Bot API token.
@@ -20,11 +23,12 @@ class TokenOnboardingScreen extends ConsumerStatefulWidget {
 class _TokenOnboardingScreenState extends ConsumerState<TokenOnboardingScreen> {
   final _controller = TextEditingController();
   final _focus = FocusNode();
-  bool _obscured = true;
   bool _validating = false;
   String? _error;
   String? _errorDetails;
   String? _connectedAs;
+  ReachabilityResult? _lastProbe;
+  List<String>? _pasteActions;
 
   @override
   void dispose() {
@@ -34,8 +38,8 @@ class _TokenOnboardingScreenState extends ConsumerState<TokenOnboardingScreen> {
   }
 
   Future<void> _connect() async {
-    final token = _controller.text.trim();
-    if (token.isEmpty) {
+    final raw = _controller.text;
+    if (raw.trim().isEmpty) {
       setState(() {
         _error = 'Enter a bot token to continue.';
         _errorDetails = null;
@@ -48,19 +52,66 @@ class _TokenOnboardingScreenState extends ConsumerState<TokenOnboardingScreen> {
       _errorDetails = null;
     });
     try {
+      // 1) Reachability pre-check: a network problem must never be
+      // reported as "token rejected". Probe api.telegram.org first.
+      final probe = await ref.read(reachabilityProvider).probe();
+      if (!mounted) return;
+      _lastProbe = probe;
+      if (!probe.reachable) {
+        setState(() {
+          _error = probe.captivePortal
+              ? 'Your network answered, but NOT with Telegram data '
+                  '(captive portal, proxy or blocker). Switch networks or '
+                  'disable the VPN/proxy and try again. This is NOT a '
+                  'token problem.'
+              : TelegramApiException(kind: TelegramErrorKind.network)
+                  .friendlyMessageOnboarding;
+          _errorDetails = 'Network probe: ${probe.summary}';
+        });
+        return;
+      }
+
+      // 2) Sanitize + ambiguity handling BEFORE any validation call.
+      final s = TokenSanitizer.sanitize(raw);
+      String token;
+      if (s.ambiguous) {
+        final picked = await pickTokenCandidate(context, s.candidates);
+        if (picked == null || !mounted) return;
+        token = picked;
+      } else if (s.token == null) {
+        setState(() {
+          _error = s.friendlyError;
+          _errorDetails = null;
+        });
+        return;
+      } else {
+        token = s.token!;
+      }
+
+      // 3) Real validation against getMe.
+      final log = s.actions.isNotEmpty ? s.actions : (_pasteActions ?? const []);
       final bot =
-          await ref.read(botSessionProvider.notifier).connect(token);
+          await ref.read(botSessionProvider.notifier).connect(
+                token,
+                sanitizerLog: log,
+              );
       if (!mounted) return;
       setState(() => _connectedAs = bot.mention);
     } on TelegramApiException catch (e) {
       if (!mounted) return;
       setState(() {
         _error = e.friendlyMessageOnboarding;
-        _errorDetails = e.technicalDetails;
+        _errorDetails = _detailsWithProbe(e);
       });
     } finally {
       if (mounted) setState(() => _validating = false);
     }
+  }
+
+  String _detailsWithProbe(TelegramApiException e) {
+    final details = e.technicalDetails;
+    final probe = _lastProbe;
+    return probe == null ? details : '$details\nNetwork probe: ${probe.summary}';
   }
 
   void _continue() {
@@ -108,29 +159,12 @@ class _TokenOnboardingScreenState extends ConsumerState<TokenOnboardingScreen> {
                     ),
                   ),
                   const SizedBox(height: 32),
-                  TextField(
+                  TokenInputField(
                     controller: _controller,
                     focusNode: _focus,
-                    obscureText: _obscured,
-                    autofocus: false,
-                    autofillHints: const [AutofillHints.password],
-                    textInputAction: TextInputAction.done,
+                    labelText: 'Bot token',
                     onSubmitted: (_) => _connect(),
-                    decoration: InputDecoration(
-                      labelText: 'Bot token',
-                      hintText: '123456789:AA…',
-                      prefixIcon: const Icon(Symbols.key_rounded, size: 20),
-                      suffixIcon: IconButton(
-                        icon: Icon(
-                          _obscured
-                              ? Symbols.visibility_rounded
-                              : Symbols.visibility_off_rounded,
-                          size: 20,
-                        ),
-                        onPressed: () =>
-                            setState(() => _obscured = !_obscured),
-                      ),
-                    ),
+                    onSanitized: (actions) => _pasteActions = actions,
                   ),
                   const SizedBox(height: 8),
                   Align(

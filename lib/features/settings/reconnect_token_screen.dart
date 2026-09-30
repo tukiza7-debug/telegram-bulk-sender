@@ -4,8 +4,11 @@ import 'package:go_router/go_router.dart';
 import 'package:material_symbols_icons/symbols.dart';
 
 import '../../core/design_system/app_theme.dart';
+import '../../core/network/reachability.dart';
 import '../../core/network/telegram_exceptions.dart';
 import '../../core/providers.dart';
+import '../../core/token_sanitizer.dart';
+import '../common/token_input_field.dart';
 
 /// Reconnect the bot from Settings: enter a (new) token, it is validated
 /// against the real Telegram API (getMe) and replaces the stored one.
@@ -22,11 +25,12 @@ class ReconnectTokenScreen extends ConsumerStatefulWidget {
 
 class _ReconnectTokenScreenState extends ConsumerState<ReconnectTokenScreen> {
   final _controller = TextEditingController();
-  bool _obscured = true;
   bool _validating = false;
   String? _error;
   String? _errorDetails;
   String? _connectedAs;
+  ReachabilityResult? _lastProbe;
+  List<String>? _pasteActions;
 
   @override
   void dispose() {
@@ -50,7 +54,48 @@ class _ReconnectTokenScreenState extends ConsumerState<ReconnectTokenScreen> {
       _errorDetails = null;
     });
     try {
-      final bot = await ref.read(botSessionProvider.notifier).connect(raw);
+      // 1) Reachability pre-check: never blame the token for a network
+      // problem. Probe api.telegram.org first.
+      final probe = await ref.read(reachabilityProvider).probe();
+      if (!mounted) return;
+      _lastProbe = probe;
+      if (!probe.reachable) {
+        setState(() {
+          _error = probe.captivePortal
+              ? 'Your network answered, but NOT with Telegram data '
+                  '(captive portal, proxy or blocker). Switch networks or '
+                  'disable the VPN/proxy and try again. This is NOT a '
+                  'token problem.'
+              : TelegramApiException(kind: TelegramErrorKind.network)
+                  .friendlyMessageOnboarding;
+          _errorDetails = 'Network probe: ${probe.summary}';
+        });
+        return;
+      }
+
+      // 2) Sanitize + ambiguity handling BEFORE the validation call.
+      final s = TokenSanitizer.sanitize(raw);
+      String token;
+      if (s.ambiguous) {
+        final picked = await pickTokenCandidate(context, s.candidates);
+        if (picked == null || !mounted) return;
+        token = picked;
+      } else if (s.token == null) {
+        setState(() {
+          _error = s.friendlyError;
+          _errorDetails = null;
+        });
+        return;
+      } else {
+        token = s.token!;
+      }
+
+      // 3) Real validation; the old token is replaced only on success.
+      final log = s.actions.isNotEmpty ? s.actions : (_pasteActions ?? const []);
+      final bot = await ref.read(botSessionProvider.notifier).connect(
+            token,
+            sanitizerLog: log,
+          );
       if (!mounted) return;
       setState(() => _connectedAs = bot.mention);
       ref.invalidate(botUsernameProvider);
@@ -64,11 +109,17 @@ class _ReconnectTokenScreenState extends ConsumerState<ReconnectTokenScreen> {
       if (!mounted) return;
       setState(() {
         _error = e.friendlyMessageOnboarding;
-        _errorDetails = e.technicalDetails;
+        _errorDetails = _detailsWithProbe(e);
       });
     } finally {
       if (mounted) setState(() => _validating = false);
     }
+  }
+
+  String _detailsWithProbe(TelegramApiException e) {
+    final details = e.technicalDetails;
+    final probe = _lastProbe;
+    return probe == null ? details : '$details\nNetwork probe: ${probe.summary}';
   }
 
   void _showHelp() {
@@ -109,28 +160,11 @@ class _ReconnectTokenScreenState extends ConsumerState<ReconnectTokenScreen> {
                     ),
                   ),
                   const SizedBox(height: 24),
-                  TextField(
+                  TokenInputField(
                     controller: _controller,
-                    obscureText: _obscured,
-                    autofillHints: const [AutofillHints.password],
-                    textInputAction: TextInputAction.done,
+                    labelText: 'New bot token',
                     onSubmitted: (_) => _reconnect(),
-                    decoration: InputDecoration(
-                      labelText: 'New bot token',
-                      hintText: '123456789:AA…',
-                      prefixIcon:
-                          const Icon(Symbols.key_rounded, size: 20),
-                      suffixIcon: IconButton(
-                        icon: Icon(
-                          _obscured
-                              ? Symbols.visibility_rounded
-                              : Symbols.visibility_off_rounded,
-                          size: 20,
-                        ),
-                        onPressed: () =>
-                            setState(() => _obscured = !_obscured),
-                      ),
-                    ),
+                    onSanitized: (actions) => _pasteActions = actions,
                   ),
                   const SizedBox(height: 8),
                   Align(
