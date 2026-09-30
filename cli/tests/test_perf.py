@@ -19,6 +19,7 @@ from telegram_bulk_image_sender.config import parse_config
 from telegram_bulk_image_sender.runner import RunRequest, run
 
 
+@pytest.mark.slow
 def test_hashing_streams_in_chunks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     blob = tmp_path / "blob.jpg"
     blob.write_bytes(b"\xff\xd8\xff" + b"\x00" * (64 * 1024 + 7))
