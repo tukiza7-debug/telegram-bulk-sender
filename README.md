@@ -244,19 +244,28 @@ key; CI builds always use the real release keystore (below).
 
 ## Troubleshooting
 
-- **"Telegram rejected this token" repeated on every paste** — three known
-  causes, all handled since v1.2.3: (1) a selection copy across the
-  visually wrapped token keeps soft line breaks *inside* the secret — the
-  app now re-joins the wrapped fragments before validating; (2) notes apps
-  reformat copies with smart dashes/quotes — normalized; (3) the token was
-  regenerated with `/revoke` in @BotFather and an older message was copied
-  — every `/revoke` kills all older tokens, so copy from the **latest**
-  message only. To tell a mangled paste from a dead token, open **Details**
-  under the error: the `Tried token:` line shows the masked fingerprint
-  (e.g. `123456789:AAH3…wk9`) of what the app actually received — if it
-  differs from what @BotFather shows, copy the token again. Pasting a bot
-  link (`t.me/…`) or `@username` now shows the actionable "that doesn't
-  look like a bot token" hint instead of a doomed 401.
+- **Self-diagnosis flow for token problems (v1.2.4)** — the token field has
+  a **paste & clean** button that reads the clipboard directly (bypassing
+  the keyboard), extracts the token even from the whole @BotFather message
+  and shows what it cleaned. Before the app ever blames the token it
+  probes api.telegram.org: an offline device or a captive portal produces
+  "Cannot reach api.telegram.org … This is NOT a token problem", never
+  "token rejected". When validation does fail with 401, open **Details**
+  under the error: it shows the masked fingerprint of the token the app
+  actually received (`123456789:AAH3…wk9`), the token length against the
+  expected 40-60 range, the sanitizer action log and the network probe —
+  if the fingerprint differs from what @BotFather shows, the copy was
+  mangled: tap the token's code span in Telegram (don't drag-select) and
+  paste again. A paste containing more than one token opens a picker
+  instead of guessing.
+- **"Telegram rejected this token" repeated on every paste** — since
+  v1.2.3/v1.2.4 the known paste-mangling causes are fixed in-app: soft
+  line breaks inside a wrapped copy are re-joined, smart
+  dashes/quotes/fullwidth colons are folded, labels are stripped, and
+  bot links (`t.me/…`) or `@usernames` produce the actionable "that
+  doesn't look like a bot token" hint instead of a doomed 401. What
+  remains is a genuinely dead token: every `/revoke` in @BotFather kills
+  all older tokens — copy from the **latest** message only.
 - **"Invalid bot token"** — make sure the whole token (including the part
   after the colon) was copied. The app cleans up labels, spaces and stray
   characters automatically, so a real token should validate on the first
@@ -266,7 +275,8 @@ key; CI builds always use the real release keystore (below).
   recipients and history are kept. Since v1.2.0 the app also re-validates
   the saved token on every launch: a revoked token is detected immediately,
   the fake "connected" state is cleared, and you are asked to reconnect
-  instead of seeing sends fail with 401.
+  instead of seeing sends fail with 401. An offline launch never wipes the
+  token — it stays "unverified" until the network returns.
 - **"The saved bot token is no longer valid" on Home** — exactly the case
   above: the token stored on this device was regenerated or revoked in
   @BotFather. Tap **Connect bot** and paste the current token from

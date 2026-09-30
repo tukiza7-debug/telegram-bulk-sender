@@ -430,3 +430,53 @@ different (freshly generated) tokens.
 
 **Verdict: audits 1-4 PASS, audit 5 not executable on this machine —
 cleared to push and tag `v1.2.3`.**
+
+## Release audit — v1.2.4 (paste-proof ingestion & truthful taxonomy)
+
+Trigger: task spec "Fix permanent token rejected / 401" — a valid token must
+validate on the FIRST try regardless of paste shape; failures must be
+classified truthfully; the user must be able to self-diagnose from the UI.
+
+## Audit 1 — Spec conformance — PASS
+1. TokenSanitizer (new lib/core/token_sanitizer.dart): trim -> wrappers ->
+   folding (case byte-exact preserved) -> label prefixes (incl. "token
+   anda") -> extraction of [0-9]{5,}:[A-Za-z0-9_-]{20,} with adjacent-word
+   re-joining (<= 10 visual lines) + squash fallback; 0 matches ->
+   actionable hint, no request fired; >1 tokens -> picker (programmatic
+   MULTIPLE_TOKENS_PASTED guard); soft length check warns, never blocks.
+2. Clipboard-first: paste & clean button on both token screens; whole
+   BotFather message works; non-blocking "Cleaned automatically: …" note.
+3. IME hardening: autocorrect/suggestions/smart dashes/quotes/caps off,
+   visiblePassword keyboard, eye toggle (widget-tested).
+4. Taxonomy: E_NET message says "This is NOT a token problem"; E_HTTP_401
+   only from Telegram ok:false JSON; E_HTTP_429 retry_after-aware;
+   E_HTTP_OTHER surfaces status + body via Details; E_TIMEOUT retried once
+   with a 10s timeout (proven by capturing per-attempt connectTimeout).
+5. Diagnostics: fingerprint + length + sanitizer log + network probe in
+   Details; raw secret asserted absent.
+6. Reachability pre-check with captive-portal detection before any
+   token-invalid UI; probe outcome (latency/status) in Details.
+7. Existing behaviors intact: reconnect keeps recipients/history; offline
+   launch keeps the token unverified (test added); storage untouched.
+
+## Audit 2 — Test matrix — PASS (14/14)
+All rows pass as unit tests, plus: whole-message paste, labeled+wrapped
+compound, 8-line and 12+ line shredded wraps, soft warnings, no-leak scans
+(action log/mask/Details never contain the raw secret), legacy wrapper
+compatibility, widget tests (paste, note, picker, empty clipboard,
+IME flags, byte-exact typing). 130/130 green (was 95); analyze 0 issues.
+
+## Audit 3 — Constraints — PASS
+- Zero new dependencies (Dart core + existing Dio only).
+- Extraction still requires digit-id + ':' + base64url secret shape;
+  getMe remains the single source of truth.
+- Non-goals respected: send engine, pacing/429, foreground service,
+  updater, storage schema untouched.
+- No raw token in any log/exception/diagnostic path (leak tests added).
+
+## Audit 4 — Device coverage — NOT RUN (no device)
+Real-device clipboard behaviors (IME quirks, Telegram code-span tap-copy)
+verified at code/test level only.
+
+**Verdict: audits 1-3 PASS, audit 4 not executable on this machine —
+cleared to push and tag `v1.2.4`.**
