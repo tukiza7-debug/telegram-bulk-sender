@@ -1,0 +1,114 @@
+# Telegram Bulk Image Sender - example configuration (YAML).
+# Copy to my.yaml and edit. Every option is documented; anything omitted
+# falls back to the default shown here. TOML is also accepted (same keys,
+# sections become [telegram], [limits], ... tables, recipients become
+# [[recipients]]). Precedence: CLI flags > env (secrets only) > this file.
+# Unknown keys are rejected with the offending key named in the error.
+
+telegram:
+  # Bot API root. Default is Telegram Cloud. For heavy media workflows or
+  # testing you can point at a self-hosted Bot API server.
+  api_base_url: https://api.telegram.org
+  # Caption parse mode: none | html | markdown | markdownv2.
+  # html is the default: escaping is simple and injection-proof.
+  parse_mode: html
+  # Per-request network timeout in seconds (uploads included).
+  timeout_seconds: 60
+
+limits:
+  # Conservative pacing (token buckets). global_per_minute caps the whole
+  # run; per_recipient_per_minute caps sends to one chat.
+  global_per_minute: 60
+  per_recipient_per_minute: 18
+  # Daily cap per recipient. Counted against the checkpoint store in UTC
+  # days; deliveries recorded today beyond this are skipped (and reported
+  # as skipped-daily-cap), never sent.
+  daily_cap_per_recipient: 50
+  quiet_hours:
+    # While enabled, sends during the window are skipped (reported, not
+    # sent later). The window may wrap past midnight as shown here.
+    enabled: false
+    start: "22:00"
+    end: "07:00"
+    timezone: UTC
+
+kill_switch:
+  # Halt the run when more than this fraction of sends in the window fails.
+  failure_rate: 0.5
+  window_minutes: 5
+  # Minimum number of completed sends in the window before the switch can
+  # fire (protects against 1/1 = 100% false positives).
+  min_sample: 10
+
+send:
+  # Max parallel uploads. Conservative default 1. Manifest (one-by-one)
+  # mode always forces 1 to preserve ordering.
+  concurrency: 1
+  # Retry budget for TRANSIENT failures (network, 5xx). Backoff doubles
+  # from backoff_base_seconds up to backoff_max_seconds, with jitter.
+  max_attempts: 4
+  backoff_base_seconds: 1.5
+  backoff_max_seconds: 60
+
+validation:
+  # sendPhoto documented max: "The photo must be at most 10 MB in size"
+  # (https://core.telegram.org/bots/api#sendphoto, fetched 2026-09-30).
+  max_file_mb: 10
+  # Check width+height (header read only) before upload.
+  verify_dimensions: true
+  # sendPhoto documented max: width and height must not exceed 10000 in
+  # total; aspect ratio limit (20) is enforced alongside.
+  max_total_dimension: 10000
+  # Write an EXIF-orientation-normalised derivative to a temp dir and send
+  # that. The original file is never modified.
+  normalize_exif: false
+  # Send a resized derivative when a file exceeds the dimension/size
+  # limits instead of failing the run. Original stays untouched.
+  resize_if_over_limit: false
+
+dedupe:
+  # Skip identical content within one run (same bytes, same chat).
+  within_run: true
+  # Skip content already delivered to a chat in an earlier run, based on
+  # the checkpoint store (this is what makes re-runs idempotent).
+  across_runs: true
+
+defaults:
+  # Used when --recipient is not passed on the CLI. Must reference the
+  # allowlist below by name or chat_id.
+  recipients: []
+  # Caption template for per-image / per-run modes. Variables:
+  #   {filename} {stem} {index} {total} {date}  + any custom manifest
+  # column. Literal braces: {{ and }}. Values are escaped AFTER
+  # substitution, so manifest data cannot inject markup.
+  caption: ""
+  # none | per-image | per-run | manifest-column
+  caption_mode: per-image
+  # Column read when caption_mode is manifest-column.
+  caption_column: caption
+  # name (natural sort: img2 < img10) | mtime | manifest-row
+  order: name
+  reverse: false
+  recursive: true
+
+# Explicit, consent-based allowlist. Anything not listed here cannot be
+# sent to, ever. There is no discovery feature by design.
+recipients:
+  - name: news
+    chat_id: -1001234567890      # channel/supergroup id (int)
+  - name: test-chat
+    chat_id: "@my_test_channel"  # or @username (str)
+
+security:
+  # Environment variable holding the bot token. The token is NEVER read
+  # from this config file.
+  token_env: TELEGRAM_BOT_TOKEN
+  # Alternative token source: a git-ignored file containing just the
+  # token. Leave null to use the env var only.
+  secrets_file: null             # e.g. .secrets/bot_token (git-ignored)
+
+storage:
+  # Checkpoint state for resume + cross-run dedupe. Keep per workspace.
+  state_file: state/checkpoint.json
+  # Per-run reports (log.jsonl, report.json, report.csv) go here.
+  report_dir: reports
